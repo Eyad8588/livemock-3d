@@ -9,3 +9,7 @@ test-results/
 assets/hdri/*.hdr
 !assets/hdri/.gitkeep
 smoke-*.png
+
+# user-provided device models (trademarked content stays local)
+assets/models/*.glb
+assets/models/*.gltf

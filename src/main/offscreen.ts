@@ -166,6 +166,7 @@ export function liveStart(req: LiveStartRequest): void {
 
   const win = new BrowserWindow({
     show: false,
+    useContentSize: true,
     width: req.viewport.w,
     height: req.viewport.h,
     webPreferences: {

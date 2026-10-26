@@ -128,7 +128,10 @@ class Store {
     const count = this.scene.devices.length
     if (count >= 4) return
     const spread = count === 0 ? 0 : ((count % 2 === 0 ? 1 : -1) * Math.ceil(count / 2) * (preset.kind === 'phone' ? 110 : 380))
-    const standY = preset.kind === 'phone' || preset.kind === 'tablet' ? preset.body.h / 2 + 2 : 0
+    const standY =
+      preset.modelFile || (preset.kind !== 'phone' && preset.kind !== 'tablet')
+        ? 0
+        : preset.body.h / 2 + 2
     this.edit(`Add ${preset.label}`, (p) => {
       const scene = p.scenes.find((s) => s.id === this.activeSceneId) ?? p.scenes[0]
       if (!scene || scene.devices.length >= 4) return

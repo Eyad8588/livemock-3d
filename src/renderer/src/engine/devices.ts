@@ -338,56 +338,171 @@ export function applyTransform(
 }
 
 /**
- * Build a device from a custom .glb/.gltf (SPEC §5). Convention: units are
- * millimeters and the mesh that receives the screen texture must be named
- * `Screen` (case-insensitive). Falls back to the largest mesh.
+ * Build a device from a custom .glb/.gltf (SPEC §5 + assets/models/README.md).
+ * The model is normalized to `targetSizeMm` (if given), grounded at y=0 and
+ * centered on x/z. The screen texture goes to a mesh named `Screen`
+ * (case-insensitive), else to a mesh whose material name contains
+ * display/screen/oled, else to the largest flat mesh.
  */
-export async function buildCustomDevice(mediaUrl: string): Promise<DeviceRig | null> {
+export async function buildCustomDevice(mediaUrl: string, targetSizeMm?: { w: number; h: number; d: number }, rotationYDeg = 0): Promise<DeviceRig | null> {
   try {
     const loader = new GLTFLoader()
     const gltf = await loader.loadAsync(mediaUrl)
-    const root = gltf.scene
-    let screen: THREE.Mesh | null = null
+    // root of the returned rig must be free for applyTransform (position/
+    // rotation keyframes), so the model + its yaw live on inner groups:
+    //   rigRoot -> yawGroup -> model (scaled + grounded)
+    const yawGroup = new THREE.Group()
+    yawGroup.rotation.y = THREE.MathUtils.degToRad(rotationYDeg)
+    const model = gltf.scene
+    yawGroup.add(model)
+    const root = yawGroup
+
+    // ---- normalize scale + grounding ----
+    root.updateMatrixWorld(true)
+    let bbox = new THREE.Box3().setFromObject(root)
+    let size = bbox.getSize(new THREE.Vector3())
+    if (targetSizeMm) {
+      // fit the widest horizontal dimension, preserving aspect
+      const scale = targetSizeMm.w / (size.x || 1)
+      model.scale.multiplyScalar(scale)
+    } else {
+      // legacy heuristic: meters -> mm, giant units -> decimeters
+      if (size.y < 5) model.scale.multiplyScalar(1000)
+      else if (size.y > 5000) model.scale.multiplyScalar(0.1)
+    }
+    root.updateMatrixWorld(true)
+    bbox = new THREE.Box3().setFromObject(root)
+    size = bbox.getSize(new THREE.Vector3())
+    const center = bbox.getCenter(new THREE.Vector3())
+    const group = new THREE.Group()
+    group.add(root)
+    model.position.sub(new THREE.Vector3(center.x, bbox.min.y, center.z))
+    group.updateMatrixWorld(true)
+
+    // ---- screen mesh pick: name > emissive (self-lit display) > thin flat > largest ----
+    // Note: GLTFLoader does not reliably expose material names, so the pick is
+    // geometry/texture-driven.
+    let byName: THREE.Mesh | null = null
+    let bestEmissive: THREE.Mesh | null = null
+    let bestEmissiveArea = 0
+    let thinFlat: THREE.Mesh | null = null
+    let thinFlatArea = 0
     let largest: THREE.Mesh | null = null
     let largestArea = 0
     root.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        if (!screen && /screen/i.test(o.name)) screen = o
-        const size = new THREE.Box3().setFromObject(o).getSize(new THREE.Vector3())
-        const area = size.x * size.y
-        if (area > largestArea) {
-          largestArea = area
-          largest = o
-        }
+      if (!(o instanceof THREE.Mesh)) return
+      const meshName = o.name.toLowerCase()
+      if (!byName && /screen|display/.test(meshName)) byName = o
+      const mat = Array.isArray(o.material) ? o.material[0] : o.material
+      const s = new THREE.Box3().setFromObject(o).getSize(new THREE.Vector3())
+      const dims = [s.x, s.y, s.z].sort((a, b) => b - a)
+      const area = dims[0]! * dims[1]!
+      if (mat?.emissiveMap && area > bestEmissiveArea) {
+        bestEmissiveArea = area
+        bestEmissive = o
+      }
+      const thinness = dims[2]! / dims[0]!
+      if (thinness < 0.12 && area > thinFlatArea) {
+        thinFlatArea = area
+        thinFlat = o
+      }
+      if (area > largestArea) {
+        largestArea = area
+        largest = o
       }
     })
-    const screenMesh = screen ?? largest
-    if (!screenMesh) return null
+    const picked = (byName ?? bestEmissive ?? thinFlat ?? largest) as THREE.Mesh | null
+    if (!picked) return null
 
-    // normalize insane units: assume meters when tiny, decimeters when huge
-    const bbox = new THREE.Box3().setFromObject(root)
-    const maxDim = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z) || 1
-    if (maxDim < 5) root.scale.multiplyScalar(1000) // meters → mm
-    else if (maxDim > 5000) root.scale.multiplyScalar(0.1)
+    // Sketchfab-style models stack several meshes over the display (frame,
+    // tinted glass, body plate). Rather than fighting their z-order, hide the
+    // picked display mesh and mount our own quad slightly in front of it.
+    // All quantities below are in `group` space (the rig root), which is what
+    // Box3.setFromObject reports while `group` has no parent transform yet.
+    group.updateMatrixWorld(true)
+    const screenBox = new THREE.Box3().setFromObject(picked)
+    const screenCenter = screenBox.getCenter(new THREE.Vector3())
+    const screenSize = screenBox.getSize(new THREE.Vector3())
+    const depth = Math.max(screenSize.x, screenSize.y, screenSize.z) * 0.002 + 0.05
+    // display normal = the picked mesh's +z axis expressed in group space
+    const pickedWorldQuat = picked.getWorldQuaternion(new THREE.Quaternion())
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(pickedWorldQuat).normalize()
+    if (Math.abs(normal.z) < Math.abs(normal.x) && Math.abs(normal.z) < Math.abs(normal.y)) {
+      // display faces ±x
+      normal.set(Math.sign(normal.x) || 1, 0, 0)
+    } else if (Math.abs(normal.y) >= Math.abs(normal.x) && Math.abs(normal.y) >= Math.abs(normal.z)) {
+      // display faces ±y
+      normal.set(0, Math.sign(normal.y) || 1, 0)
+    } else {
+      normal.set(0, 0, Math.sign(normal.z) || 1)
+    }
+    // the quad must face the camera side (+z); the picked mesh's own facing
+    // may be inverted depending on how the model was authored
+    if (normal.z < 0) normal.multiplyScalar(-1)
 
-    const screenMat = new THREE.MeshBasicMaterial({ toneMapped: false })
-    ;(screenMesh as THREE.Mesh).material = screenMat
+    picked.visible = false
+    root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh) || o === picked) return
+      const b = new THREE.Box3().setFromObject(o)
+      const c = b.getCenter(new THREE.Vector3())
+      const sz = b.getSize(new THREE.Vector3())
+      const covers =
+        Math.abs(c.x - screenCenter.x) < screenSize.x * 0.15 &&
+        Math.abs(c.y - screenCenter.y) < screenSize.y * 0.15 &&
+        sz.x < screenSize.x * 1.35 &&
+        sz.y < screenSize.y * 1.35
+      if (covers && Math.abs(c.clone().sub(screenCenter).dot(normal)) < Math.max(depth * 4, screenSize.z * 0.6 + 0.5)) {
+        // anything stacked over the display goes away — content comes first
+        o.visible = false
+      }
+    })
+
+    // quad dimensions: the two axes perpendicular to the normal
+    const quadW = Math.abs(normal.z) >= Math.abs(normal.x) && Math.abs(normal.z) >= Math.abs(normal.y) ? screenSize.x : screenSize.y
+    const quadH = Math.abs(normal.z) >= Math.abs(normal.x) && Math.abs(normal.z) >= Math.abs(normal.y) ? screenSize.y : screenSize.z
+    const quadGeo = new THREE.PlaneGeometry(quadW, quadH)
+    const screenMat = new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.FrontSide })
+    const screenQuad = new THREE.Mesh(quadGeo, screenMat)
+    screenQuad.position.copy(screenCenter).add(normal.clone().multiplyScalar(depth))
+    screenQuad.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal)
+    group.add(screenQuad)
+    const screenMesh = screenQuad
+    root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh) || o === screenMesh) return
+      const mat = Array.isArray(o.material) ? o.material[0] : o.material
+      if (!mat?.transparent) return
+      const b = new THREE.Box3().setFromObject(o)
+      const c = b.getCenter(new THREE.Vector3())
+      const sz = b.getSize(new THREE.Vector3())
+      const near =
+        Math.abs(c.x - screenCenter.x) < screenSize.x * 0.15 &&
+        Math.abs(c.y - screenCenter.y) < screenSize.y * 0.15 &&
+        Math.abs(c.z - screenCenter.z) < screenSize.z * 0.4 + 2 &&
+        sz.x < screenSize.x * 1.3 &&
+        sz.y < screenSize.y * 1.3
+      if (near) {
+        mat.opacity = Math.min(mat.opacity, 0.05)
+        // transmission passes dominate opacity and would darken the screen
+        ;(mat as THREE.MeshPhysicalMaterial).transmission = 0
+        mat.depthWrite = false
+      }
+    })
 
     const dispose = (): void => {
-      root.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          o.geometry.dispose()
-        }
+      group.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose()
       })
       screenMat.dispose()
     }
+    const bboxFinal = new THREE.Box3().setFromObject(group)
+    const sizeFinal = bboxFinal.getSize(new THREE.Vector3())
     return {
-      root,
+      root: group,
       screenMesh: screenMesh as THREE.Mesh,
       glareMesh: null,
       lidPivot: null,
-      screenWmm: 300,
-      screenHmm: 500,
+      screenWmm: sizeFinal.x,
+      screenHmm: sizeFinal.y,
       dispose
     }
   } catch (err) {

@@ -1,0 +1,55 @@
+appId: app.livemock3d
+productName: LiveMock 3D
+copyright: MIT © 2026 LiveMock 3D contributors
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/**
+  - package.json
+  - "!**/*.map"
+  - "!node_modules/**/{test,__tests__,tests,spec}/**"
+  - "!node_modules/**/*.d.ts"
+
+extraResources:
+  - from: assets
+    to: assets
+    filter:
+      - "**/*"
+      - "!hdri/*.hdr.raw"
+
+asarUnpack:
+  - "node_modules/ffmpeg-static/**"
+  - "node_modules/fflate/**"
+
+mac:
+  category: public.app-category.video
+  target:
+    - target: dmg
+      arch: [universal]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  signingHashAlgorithms:
+    - sha256
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: LiveMock 3D
+
+npmRebuild: false

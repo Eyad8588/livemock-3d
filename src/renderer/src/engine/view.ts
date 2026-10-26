@@ -254,12 +254,14 @@ class SceneController {
     for (const dev of scene.devices) {
       let rig = this.rigs.get(dev.id)
       const preset = getPreset(dev.presetId)
-      if (!rig && dev.customModelMediaId) {
+      const presetModelUrl = preset.modelFile ? `livemock-test://model/${preset.modelFile}` : null
+      if (!rig && (dev.customModelMediaId || presetModelUrl)) {
         // async custom-model path: placeholder box while loading
         const placeholder = buildDevice(preset, dev.material.finish, dev.material.color, dev.cutout)
         this.scene.add(placeholder.root)
         this.rigs.set(dev.id, placeholder)
-        void buildCustomDevice(window.livemock.mediaMediaUrl(dev.customModelMediaId)).then((custom) => {
+        const modelUrl = dev.customModelMediaId ? window.livemock.mediaMediaUrl(dev.customModelMediaId) : presetModelUrl!
+        void buildCustomDevice(modelUrl, preset.targetSizeMm, preset.modelRotationYDeg ?? 0).then((custom) => {
           const current = this.rigs.get(dev.id)
           if (!custom || current !== placeholder) {
             if (custom && current !== placeholder) custom.dispose()
@@ -274,6 +276,7 @@ class SceneController {
           this.rigs.set(dev.id, custom)
           const provider = this.providers.get(dev.id)
           if (provider) this.applyProviderToRig(custom, provider)
+          this.syncGizmo()
           void this.evaluateTime()
         })
         continue
@@ -291,7 +294,7 @@ class SceneController {
         this.scene.add(rig.root)
         this.rigs.set(dev.id, rig)
         this.attachProvider(dev)
-      } else {
+      } else if (!preset.modelFile && !dev.customModelMediaId) {
         // material / cutout changes: rebuild (cheap enough at these sizes)
         const needsRebuild =
           (rig.root.userData as { finish?: string; color?: string; cutout?: string }).finish !== dev.material.finish ||
@@ -469,6 +472,11 @@ class SceneController {
   /** @internal test hook */
   debugCamera(): THREE.PerspectiveCamera {
     return this.camera
+  }
+
+  /** @internal test hook */
+  debugThree(): typeof THREE {
+    return THREE
   }
 
   /** @internal test hook: world-space screen orientation info */

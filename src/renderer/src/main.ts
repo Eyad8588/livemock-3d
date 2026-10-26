@@ -10,6 +10,7 @@ import { initLeftPanel } from './ui/leftPanel'
 import { mountInspector } from './ui/inspector'
 import { mountTimeline } from './ui/timeline'
 import { checkRecovery, showShortcuts, showWebGlError } from './ui/dialogs'
+import { maybeShowFirstRun } from './ui/firstRun'
 import { el } from './ui/dom'
 
 function hasWebGL2(): boolean {
@@ -113,6 +114,7 @@ async function bootstrap(): Promise<void> {
   })
 
   await checkRecovery()
+  window.setTimeout(() => maybeShowFirstRun(), 600)
 
   // expose for E2E tests only (never used in production code paths)
   void Promise.all([import('./engine/modes'), import('./export/exporter')]).then(([m, ex]) => {
@@ -122,7 +124,8 @@ async function bootstrap(): Promise<void> {
       export: (settings: Parameters<typeof ex.startExport>[0], onProgress?: (p: unknown) => void) => {
         const handle = ex.startExport(settings, store.scene, (p) => onProgress?.(p))
         return handle.promise
-      }
+      },
+      getThree: () => sceneController.debugThree()
     }
     ;(window as unknown as { __lmModes?: unknown }).__lmModes = { apply: m.applyMode }
   })

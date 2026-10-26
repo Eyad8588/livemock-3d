@@ -75,7 +75,9 @@ function registerMediaProtocolHandlers(ses: typeof protocol): void {
   ses.handle('livemock-test', (request) => {
     const url = new URL(request.url)
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html'
-    const base = path.join(assetsRoot(), 'assets', 'test-pages')
+    // livemock-test://model/<file> serves user-provided device models
+    const base = url.host === 'model' ? path.join(assetsRoot(), 'assets', 'models') : path.join(assetsRoot(), 'assets', 'test-pages')
+    if (url.host === 'model' && !/\.(glb|gltf)$/i.test(rel)) return new Response('Forbidden', { status: 403 })
     const resolved = path.resolve(base, rel)
     if (!resolved.startsWith(base)) return new Response('Forbidden', { status: 403 })
     if (!fs.existsSync(resolved)) return new Response('Not found', { status: 404 })

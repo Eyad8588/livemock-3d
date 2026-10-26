@@ -112,8 +112,46 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   }
 ]
 
+// GLB-backed presets: load user-provided models from assets/models
+// (see assets/models/README.md). They behave like built-ins everywhere.
+export const GLB_DEVICE_PRESETS: DevicePreset[] = [
+  {
+    id: 'glb-iphone-17-pro-max',
+    label: 'iPhone 17 Pro Max (GLB)',
+    kind: 'phone',
+    viewport: { w: 440, h: 956 },
+    body: { w: 77.6, h: 163.0, d: 8.25, bezelX: 3.2, bezelY: 3.4, cornerRadius: 13.5 },
+    cutout: 'none',
+    defaultFinish: 'titanium',
+    defaultColor: '#3a3c40',
+    mobileEmulation: true,
+    modelFile: 'phone_17_pro_max.glb',
+    modelRotationYDeg: 180,
+    targetSizeMm: { w: 77.6, h: 163.0, d: 8.25 }
+  },
+  {
+    id: 'glb-macbook-16',
+    label: 'MacBook Pro 16" (GLB)',
+    kind: 'laptop',
+    viewport: { w: 1728, h: 1117 },
+    body: { w: 355.4, h: 248.1, d: 16.8, bezelX: 5.4, bezelY: 5.4, cornerRadius: 8.5 },
+    cutout: 'none',
+    lid: { hingeAtBack: true },
+    defaultFinish: 'aluminum',
+    defaultColor: '#2e2f33',
+    mobileEmulation: false,
+    modelFile: 'macbook_pro_m3_16_inch_2024.glb',
+    targetSizeMm: { w: 355.4, h: 248.1, d: 16.8 }
+  }
+]
+
+export function allDevicePresets(): DevicePreset[] {
+  return [...DEVICE_PRESETS, ...GLB_DEVICE_PRESETS]
+}
+
 export function getPreset(presetId: string): DevicePreset {
-  const p = DEVICE_PRESETS.find((x) => x.id === presetId)
+  const all = [...DEVICE_PRESETS, ...GLB_DEVICE_PRESETS]
+  const p = all.find((x) => x.id === presetId)
   if (!p) throw new Error(`Unknown device preset: ${presetId}`)
   return p
 }

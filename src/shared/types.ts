@@ -62,6 +62,12 @@ export interface DevicePreset {
   defaultFinish: Finish
   defaultColor: string
   mobileEmulation: boolean
+  /** GLB-backed preset: file served from assets/models via livemock-test://model/<file> */
+  modelFile?: string
+  /** yaw applied to the imported model so its screen faces +z (the camera side) */
+  modelRotationYDeg?: number
+  /** real-world size in mm used to normalize imported model scale + framing */
+  targetSizeMm?: { w: number; h: number; d: number }
 }
 
 export interface WalkthroughStepWait {

@@ -1,5 +1,5 @@
 // Right inspector: selected device properties + screen source controls.
-import { DEVICE_PRESETS, getPreset } from '@shared/presets'
+import { allDevicePresets, getPreset } from '@shared/presets'
 import type { DeviceInstance, Finish, ScreenSource, TakeEntry } from '@shared/types'
 import { store } from '../state/store'
 import { t, onLangChange } from '../i18n/i18n'
@@ -29,7 +29,7 @@ export function mountInspector(root: HTMLElement): void {
         if (v && v !== dev.presetId) store.patchDevice(dev.id, { presetId: v }, 'Change model')
       }
     }) as HTMLSelectElement
-    for (const p of DEVICE_PRESETS) modelSelect.append(el('option', { value: p.id, selected: p.id === dev.presetId }, p.label))
+    for (const p of allDevicePresets()) modelSelect.append(el('option', { value: p.id, selected: p.id === dev.presetId }, p.label))
     root.appendChild(row(t('inspector.preset'), modelSelect))
     root.appendChild(
       row(

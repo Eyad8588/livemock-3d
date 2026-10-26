@@ -1,5 +1,5 @@
 // Left panel: scene tabs, device list, add device, environment picker, media.
-import { DEVICE_PRESETS } from '@shared/presets'
+import { allDevicePresets } from '@shared/presets'
 import type { MediaEntry } from '@shared/types'
 import { store } from '../state/store'
 import { t, onLangChange } from '../i18n/i18n'
@@ -48,7 +48,7 @@ export function mountLeftPanel(root: HTMLElement): void {
       root.appendChild(el('div', { style: 'color:var(--text-dim);margin:4px 12px 8px' }, t('left.noDevices')))
     }
     for (const d of scene.devices) {
-      const preset = DEVICE_PRESETS.find((p) => p.id === d.presetId)
+      const preset = allDevicePresets().find((p) => p.id === d.presetId)
       const badge =
         d.screen.kind === 'url'
           ? el('span', { class: 'badge live' }, d.screen.takeId ? 'take' : 'live')
@@ -86,7 +86,7 @@ export function mountLeftPanel(root: HTMLElement): void {
       addSelect.value = ''
     } }) as HTMLSelectElement
     addSelect.append(el('option', { value: '' }, `+ ${t('left.addDevice')}`))
-    for (const p of DEVICE_PRESETS) {
+    for (const p of allDevicePresets()) {
       addSelect.append(el('option', { value: p.id }, p.label))
     }
     addRow.append(addSelect)
