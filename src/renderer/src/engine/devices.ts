@@ -2,6 +2,7 @@
 // proportions. No trademarks, no imported models — everything built here.
 
 import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import type { Cutout, DevicePreset, Finish } from '@shared/types'
 
 export interface DeviceRig {
@@ -201,13 +202,18 @@ export function buildDevice(preset: DevicePreset, finish: Finish, colorHex: stri
       }
     }
   } else if (preset.kind === 'laptop') {
-    const { w, h, d, cornerRadius } = preset.body
-    const lidH = h * 0.68 // lid length
-    const baseDepth = d + 6
-    // base
+    // body semantics for laptops: w × h × d = width × base-depth × thickness
+    const { w, h, d, bezelX, bezelY, cornerRadius } = preset.body
+    // lid length derived from the screen aspect so the panel matches the viewport
+    const screenAspect = preset.viewport.w / preset.viewport.h
+    const panelW = w - bezelX * 2
+    const lidH = panelW / screenAspect + bezelY * 2 + 4
+    const baseDepth = h // the palm rest / keyboard well depth
+    // base (slab height becomes the horizontal depth; rotate flat)
     const baseGeo = slabGeometry(w, baseDepth, 6, cornerRadius * 0.4)
     disposables.push(baseGeo)
     const baseMesh = new THREE.Mesh(baseGeo, body)
+    baseMesh.rotation.x = -Math.PI / 2
     baseMesh.position.y = 3 // half thickness
     root.add(baseMesh)
 
@@ -231,34 +237,33 @@ export function buildDevice(preset: DevicePreset, finish: Finish, colorHex: stri
     lidPivot = new THREE.Group()
     lidPivot.position.set(0, 6, -baseDepth / 2 + 1)
     root.add(lidPivot)
-    const lidGeo = slabGeometry(w, lidH, 5, cornerRadius * 0.5)
+    const lidGeo = slabGeometry(w, lidH, Math.max(4, d * 0.4), cornerRadius * 0.5)
     disposables.push(lidGeo)
     const lidMesh = new THREE.Mesh(lidGeo, body)
     lidMesh.position.set(0, 0, lidH / 2 - 2) // extends +z from hinge; rotated open by pivot
     lidPivot.add(lidMesh)
 
-    // screen on -y face of lid (faces camera when open)
-    screenW = w - preset.body.bezelX * 2
-    screenHmm = lidH - preset.body.bezelY * 2 - 4
+    // screen on -y face of lid: with lidPivot.rotation.x = -angle this faces the camera when open
+    screenW = panelW
+    screenHmm = panelW / screenAspect
     const screenGeo = roundedRectGeometry(screenW, screenHmm, cornerRadius * 0.5)
     disposables.push(screenGeo)
     screenMesh = new THREE.Mesh(screenGeo, screenMaterial)
     screenMesh.rotation.x = Math.PI / 2 // face -y
-    screenMesh.position.set(0, -3.1, lidH / 2 - 2)
+    screenMesh.position.set(0, -(Math.max(4, d * 0.4) / 2 + 0.4), lidH / 2 - 2)
     lidPivot.add(screenMesh)
 
     const glareGeo2 = roundedRectGeometry(screenW, screenHmm, cornerRadius * 0.5)
     disposables.push(glareGeo2)
     glareMesh = new THREE.Mesh(glareGeo2, glareMaterial)
     glareMesh.rotation.x = Math.PI / 2
-    glareMesh.position.set(0, -3.4, lidH / 2 - 2)
+    glareMesh.position.set(0, -(Math.max(4, d * 0.4) / 2 + 0.7), lidH / 2 - 2)
     lidPivot.add(glareMesh)
 
     const co = buildCutout(cutout, screenW, screenHmm, cornerRadius * 0.5, 0)
     if (co) {
-      // screen plane was rotated +90° around X to face -y; match that for the cutout
       co.rotation.x = Math.PI / 2
-      co.position.set(0, -3.0, lidH / 2 - 2 + 0.42)
+      co.position.set(0, -(Math.max(4, d * 0.4) / 2 + 0.3), lidH / 2 - 2 + 0.42)
       lidPivot.add(co)
     }
     root.position.y = 0
@@ -299,6 +304,7 @@ export function buildDevice(preset: DevicePreset, finish: Finish, colorHex: stri
     root.add(pole)
     disposables.push(pole.geometry)
     const foot = new THREE.Mesh(slabGeometry(w * 0.34, d * 1.1, 8, 8), standMat)
+    foot.rotation.x = -Math.PI / 2
     foot.position.set(0, 4, -d * 0.1)
     root.add(foot)
   }
@@ -328,5 +334,64 @@ export function applyTransform(
   rig.root.scale.set(t.scale.x, t.scale.y, t.scale.z)
   if (rig.lidPivot && lidAngleDeg !== undefined) {
     rig.lidPivot.rotation.x = -THREE.MathUtils.degToRad(Math.min(115, Math.max(0, lidAngleDeg)))
+  }
+}
+
+/**
+ * Build a device from a custom .glb/.gltf (SPEC §5). Convention: units are
+ * millimeters and the mesh that receives the screen texture must be named
+ * `Screen` (case-insensitive). Falls back to the largest mesh.
+ */
+export async function buildCustomDevice(mediaUrl: string): Promise<DeviceRig | null> {
+  try {
+    const loader = new GLTFLoader()
+    const gltf = await loader.loadAsync(mediaUrl)
+    const root = gltf.scene
+    let screen: THREE.Mesh | null = null
+    let largest: THREE.Mesh | null = null
+    let largestArea = 0
+    root.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        if (!screen && /screen/i.test(o.name)) screen = o
+        const size = new THREE.Box3().setFromObject(o).getSize(new THREE.Vector3())
+        const area = size.x * size.y
+        if (area > largestArea) {
+          largestArea = area
+          largest = o
+        }
+      }
+    })
+    const screenMesh = screen ?? largest
+    if (!screenMesh) return null
+
+    // normalize insane units: assume meters when tiny, decimeters when huge
+    const bbox = new THREE.Box3().setFromObject(root)
+    const maxDim = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z) || 1
+    if (maxDim < 5) root.scale.multiplyScalar(1000) // meters → mm
+    else if (maxDim > 5000) root.scale.multiplyScalar(0.1)
+
+    const screenMat = new THREE.MeshBasicMaterial({ toneMapped: false })
+    ;(screenMesh as THREE.Mesh).material = screenMat
+
+    const dispose = (): void => {
+      root.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose()
+        }
+      })
+      screenMat.dispose()
+    }
+    return {
+      root,
+      screenMesh: screenMesh as THREE.Mesh,
+      glareMesh: null,
+      lidPivot: null,
+      screenWmm: 300,
+      screenHmm: 500,
+      dispose
+    }
+  } catch (err) {
+    console.warn('[livemock] custom model load failed:', err)
+    return null
   }
 }

@@ -8,10 +8,11 @@ import { getPreset } from '@shared/presets'
 import { evalTrack } from '@shared/easingMath'
 import type { DeviceInstance, LiveFramePayload } from '@shared/types'
 import { store } from '../state/store'
-import { buildDevice, applyTransform, type DeviceRig } from './devices'
+import { buildDevice, buildCustomDevice, applyTransform, type DeviceRig } from './devices'
 import { createEnvironment, sceneEnvironment, type EnvRig } from './environments'
 import { ImageProvider, VideoProvider, type ScreenProvider } from './screenSource'
 import { LiveProvider } from './screenSource'
+import { PostFxStack } from './postfx'
 
 export interface ViewportStats {
   fps: number
@@ -33,6 +34,7 @@ class SceneController {
   private fpsSamples: number[] = []
   private cameraWasPlaying = false
 
+  private postFx = new PostFxStack()
   private rigs = new Map<string, DeviceRig>()
   private providers = new Map<string, ScreenProvider>()
   private liveKeys = new Map<string, string>() // deviceId -> sourceKey
@@ -252,6 +254,30 @@ class SceneController {
     for (const dev of scene.devices) {
       let rig = this.rigs.get(dev.id)
       const preset = getPreset(dev.presetId)
+      if (!rig && dev.customModelMediaId) {
+        // async custom-model path: placeholder box while loading
+        const placeholder = buildDevice(preset, dev.material.finish, dev.material.color, dev.cutout)
+        this.scene.add(placeholder.root)
+        this.rigs.set(dev.id, placeholder)
+        void buildCustomDevice(window.livemock.mediaMediaUrl(dev.customModelMediaId)).then((custom) => {
+          const current = this.rigs.get(dev.id)
+          if (!custom || current !== placeholder) {
+            if (custom && current !== placeholder) custom.dispose()
+            return
+          }
+          this.scene.remove(placeholder.root)
+          placeholder.dispose()
+          custom.root.traverse((o) => {
+            if (o instanceof THREE.Mesh) o.castShadow = true
+          })
+          this.scene.add(custom.root)
+          this.rigs.set(dev.id, custom)
+          const provider = this.providers.get(dev.id)
+          if (provider) this.applyProviderToRig(custom, provider)
+          void this.evaluateTime()
+        })
+        continue
+      }
       if (!rig) {
         rig = buildDevice(preset, dev.material.finish, dev.material.color, dev.cutout)
         rig.root.traverse((o) => {
@@ -435,6 +461,31 @@ class SceneController {
     return this.providers.get(deviceId) ?? null
   }
 
+  /** @internal test hook */
+  debugRig(deviceId: string): DeviceRig | null {
+    return this.rigs.get(deviceId) ?? null
+  }
+
+  /** @internal test hook */
+  debugCamera(): THREE.PerspectiveCamera {
+    return this.camera
+  }
+
+  /** @internal test hook: world-space screen orientation info */
+  debugScreenInfo(deviceId: string): { normal: THREE.Vector3; position: THREE.Vector3; camera: THREE.Vector3; lidRotX: number } | null {
+    const rig = this.rigs.get(deviceId)
+    if (!rig) return null
+    this.scene.updateMatrixWorld(true)
+    const n = new THREE.Vector3(0, 0, 1)
+    n.applyQuaternion(rig.screenMesh.getWorldQuaternion(new THREE.Quaternion()))
+    return {
+      normal: { x: n.x, y: n.y, z: n.z } as unknown as THREE.Vector3,
+      position: rig.screenMesh.getWorldPosition(new THREE.Vector3()),
+      camera: this.camera.position.clone(),
+      lidRotX: rig.lidPivot?.rotation.x ?? 0
+    }
+  }
+
   private async evaluateTime(): Promise<void> {
     const t = store.time
     for (const dev of store.scene.devices) {
@@ -488,7 +539,16 @@ class SceneController {
       void this.evaluateTime()
     }
     this.controls?.update()
-    this.renderer.render(this.scene, this.camera)
+    const fx = store.scene.postFx
+    const fxOn = fx.bloom || fx.vignette || fx.filmGrain || fx.depthOfField
+    if (fxOn) {
+      this.postFx.ensure(this.renderer, this.scene, this.camera, this.container?.clientWidth ?? 800, this.container?.clientHeight ?? 600)
+      this.postFx.setCamera(this.camera)
+      this.postFx.apply(fx, store.time)
+      this.postFx.render(dt)
+    } else {
+      this.renderer.render(this.scene, this.camera)
+    }
 
     if (this.onStats) {
       const fps = this.fpsSamples.reduce((a, b) => a + b, 0) / Math.max(1, this.fpsSamples.length)
@@ -509,6 +569,7 @@ class SceneController {
     this.renderer.setSize(w, h, false)
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
+    this.postFx.resize(w, h)
   }
 
   /**
@@ -521,9 +582,19 @@ class SceneController {
       samples: 4,
       colorSpace: THREE.SRGBColorSpace
     })
+    const fx = store.scene.postFx
+    const fxOn = fx.bloom || fx.vignette || fx.filmGrain || fx.depthOfField
     this.renderer.setRenderTarget(target)
     this.renderer.setClearAlpha(0)
-    this.renderer.render(this.scene, this.camera)
+    if (fxOn) {
+      this.postFx.ensure(this.renderer, this.scene, this.camera, width, height)
+      this.postFx.resize(width, height)
+      this.postFx.setCamera(this.camera)
+      this.postFx.apply(fx, store.time)
+      this.postFx.render(1 / 60)
+    } else {
+      this.renderer.render(this.scene, this.camera)
+    }
     const buf = new Uint8Array(width * height * 4)
     this.renderer.readRenderTargetPixels(target, 0, 0, width, height, buf)
     this.renderer.setRenderTarget(null)
@@ -556,6 +627,7 @@ class SceneController {
   }
 
   dispose(): void {
+    this.postFx.dispose()
     cancelAnimationFrame(this.raf)
     for (const u of this.unsubscribers) u()
     for (const key of this.liveKeys.values()) void window.livemock.liveStop(key)

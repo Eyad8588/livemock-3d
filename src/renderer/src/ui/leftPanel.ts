@@ -131,6 +131,29 @@ export function mountLeftPanel(root: HTMLElement): void {
       root.appendChild(colors)
     }
 
+    // post fx
+    root.appendChild(el('div', { class: 'section-title' }, 'Post FX'))
+    const fx = scene.postFx
+    const mkToggle = (key: 'depthOfField' | 'bloom' | 'vignette' | 'filmGrain', label: string): HTMLElement => {
+      const cb = el('input', {
+        type: 'checkbox',
+        ...(fx[key] ? { checked: 'true' } : {}),
+        onchange: (e: Event) => {
+          const v = (e.target as HTMLInputElement).checked
+          store.edit('Toggle post fx', (p) => {
+            const s = p.scenes.find((x) => x.id === scene.id)
+            if (s) s.postFx[key] = v
+          })
+        }
+      }) as HTMLInputElement
+      const row = el('label', { class: 'row', style: 'margin:2px 10px' }, cb, el('span', {}, label))
+      return row
+    }
+    root.appendChild(mkToggle('bloom', 'Bloom'))
+    root.appendChild(mkToggle('vignette', 'Vignette'))
+    root.appendChild(mkToggle('filmGrain', 'Film grain'))
+    root.appendChild(mkToggle('depthOfField', 'Depth of field (beta)'))
+
     // media
     root.appendChild(el('div', { class: 'section-title' }, t('left.media')))
     const importBtn = el(

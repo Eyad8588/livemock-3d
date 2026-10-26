@@ -31,6 +31,14 @@ export function mountInspector(root: HTMLElement): void {
     }) as HTMLSelectElement
     for (const p of DEVICE_PRESETS) modelSelect.append(el('option', { value: p.id, selected: p.id === dev.presetId }, p.label))
     root.appendChild(row(t('inspector.preset'), modelSelect))
+    root.appendChild(
+      row(
+        'Custom GLB',
+        el('button', {
+          onclick: () => void importCustomModel(dev)
+        }, dev.customModelMediaId ? 'Replace .glb' : 'Import .glb…')
+      )
+    )
 
     // finish
     const finishSelect = el('select', {
@@ -453,6 +461,21 @@ function renderUrlControls(root: HTMLElement, dev: DeviceInstance): void {
     ;(root as unknown as { __cleanup?: () => void }).__cleanup = undefined
   }
   ;(root as unknown as { __cleanup?: () => void }).__cleanup = cleanup
+}
+
+async function importCustomModel(dev: DeviceInstance): Promise<void> {
+  const entries = await window.livemock.importMediaDialog(store.project.id)
+  const model = entries.find((m) => m.kind === 'model')
+  if (!model) return
+  store.addMedia([model])
+  store.patchDevice(dev.id, { customModelMediaId: model.id }, 'Import custom model')
+  sceneControllerSync(dev.id)
+}
+
+function sceneControllerSync(deviceId: string): void {
+  void import('../engine/view').then(({ sceneController }) => {
+    sceneController.refreshScreenOf(deviceId)
+  })
 }
 
 async function recordTake(dev: DeviceInstance): Promise<void> {

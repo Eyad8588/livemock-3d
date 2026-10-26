@@ -115,21 +115,23 @@ export function framing(devices: DeviceInstance[]): { center: Vec3; distance: nu
   let minX = Infinity
   let maxX = -Infinity
   let maxY = 0
+  let maxDim = 0
   for (const d of devices) {
     const t = d.transform.keys[0]?.value
     const x = t?.position.x ?? 0
     minX = Math.min(minX, x - deviceWidth(d) / 2)
     maxX = Math.max(maxX, x + deviceWidth(d) / 2)
     const h = deviceHeight(d)
-    maxY = Math.max(maxY, (presetIsStanding(d) ? h : h / 2 + 40))
+    maxDim = Math.max(maxDim, h)
+    maxY = Math.max(maxY, presetIsStanding(d) ? h : h / 2 + 40)
   }
   const width = Math.max(120, maxX - minX)
   const cx = (minX + maxX) / 2
   const cy = maxY * 0.52
-  // fov 32° → distance to fit height and width
-  const distH = (maxY * 1.35) / Math.tan((16 * Math.PI) / 180)
-  const distW = (width * 1.6) / Math.tan((16 * Math.PI) / 180) / (9 / 16 > 1 ? 1 : 1)
-  return { center: { x: cx, y: cy, z: 0 }, distance: Math.max(320, Math.max(distH, distW)), height: cy }
+  // single device: frame by its own size; multi-device: frame the spread
+  const span = Math.max(maxDim, width * 0.9)
+  const distance = Math.min(1400, Math.max(320, span * 2.2))
+  return { center: { x: cx, y: cy, z: 0 }, distance, height: cy }
 }
 
 function presetIsStanding(dev: DeviceInstance): boolean {
