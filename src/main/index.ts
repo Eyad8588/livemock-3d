@@ -55,11 +55,11 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 function assetsRoot(): string {
-  return process.env['ELECTRON_RENDERER_URL'] ? process.cwd() : path.resolve(__dirname, '../../..')
+  return process.env['ELECTRON_RENDERER_URL'] ? process.cwd() : path.resolve(__dirname, '../..')
 }
 
-function registerProtocols(): void {
-  protocol.handle('livemock-media', async (request) => {
+function registerMediaProtocolHandlers(ses: typeof protocol): void {
+  ses.handle('livemock-media', async (request) => {
     const url = new URL(request.url)
     const kind = url.host === 'take' ? 'take' : 'media'
     const id = decodeURIComponent(url.pathname.replace(/^\//, '')).replace(/\.[a-z0-9]+$/i, '')
@@ -72,7 +72,7 @@ function registerProtocols(): void {
     return new Response(res.body, { status: res.status, headers })
   })
 
-  protocol.handle('livemock-test', (request) => {
+  ses.handle('livemock-test', (request) => {
     const url = new URL(request.url)
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html'
     const base = path.join(assetsRoot(), 'assets', 'test-pages')
@@ -81,6 +81,15 @@ function registerProtocols(): void {
     if (!fs.existsSync(resolved)) return new Response('Not found', { status: 404 })
     return net.fetch(pathToFileURL(resolved).toString())
   })
+}
+
+function registerProtocols(): void {
+  registerMediaProtocolHandlers(protocol)
+}
+
+/** Custom-protocol handlers must also exist on the offscreen session. */
+export function registerOffscreenProtocolHandlers(ses: typeof protocol): void {
+  registerMediaProtocolHandlers(ses)
 }
 
 // ---------- settings ----------

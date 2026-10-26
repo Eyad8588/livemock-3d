@@ -4,6 +4,7 @@
 // file:// blocked.
 
 import { BrowserWindow, session, type NativeImage, type WebContents } from 'electron'
+import { registerOffscreenProtocolHandlers } from './index'
 import { IPC, type LiveInputEvent, type LiveStartRequest } from '../shared/ipc'
 import { EASING_SCRIPT } from '../shared/easingMath'
 import type { LivePageInfo, WalkthroughStep } from '../shared/types'
@@ -18,6 +19,7 @@ function configureOffscreenSession(): void {
   if (sessionConfigured) return
   sessionConfigured = true
   const ses = session.fromPartition('persist:livemock-offscreen')
+  registerOffscreenProtocolHandlers(ses.protocol)
   const deny = (_wc: unknown, _perm: unknown, callback: (allow: boolean) => void) => callback(false)
   ses.setPermissionRequestHandler(deny)
   ses.setPermissionCheckHandler(() => false)

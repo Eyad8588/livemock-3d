@@ -307,8 +307,10 @@ class SceneController {
 
   private applyProviderToRig(rig: DeviceRig, provider: ScreenProvider | null): void {
     const mat = rig.screenMesh.material as THREE.MeshBasicMaterial
-    mat.map = provider?.texture ?? null
-    mat.color.set(provider?.background ?? 0x07080a)
+    const tex = provider?.texture ?? null
+    mat.map = tex
+    // white multiplies the texture faithfully; background color only when no map
+    mat.color.set(tex ? 0xffffff : (provider?.background ?? 0x07080a))
     mat.needsUpdate = true
   }
 
