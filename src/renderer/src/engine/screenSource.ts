@@ -1,0 +1,235 @@
+// Screen-source providers (SPEC §4): image / video / live-URL preview.
+// Each provider yields a THREE.Texture and knows how to update at time t.
+
+import * as THREE from 'three'
+import type { ScreenSource } from '@shared/types'
+import type { LiveEvent, LiveInputEvent } from '@shared/ipc'
+
+export interface ScreenProvider {
+  readonly texture: THREE.Texture | null
+  /** background color for 'fit' letterboxing */
+  readonly background: THREE.Color
+  /** called every frame with scene time (s) */
+  update(timeSec: number, playing: boolean): void
+  dispose(): void
+  // live-only surface
+  sendInput?(ev: LiveInputEvent): void
+  getLiveInfo?(): { scrollY: number; scrollHeight: number; viewportW: number; viewportH: number } | null
+  ripple?(x: number, y: number): void
+}
+
+export function isLiveSource(s: ScreenSource): s is Extract<ScreenSource, { kind: 'url' }> {
+  return s.kind === 'url'
+}
+
+// ---------- image ----------
+
+class ImageProvider implements ScreenProvider {
+  texture: THREE.Texture | null = null
+  background = new THREE.Color(0x000000)
+  private mediaId: string
+
+  constructor(mediaId: string, mediaUrl: string) {
+    this.mediaId = mediaId
+    const loader = new THREE.TextureLoader()
+    loader.setCrossOrigin('anonymous')
+    loader.load(
+      mediaUrl,
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace
+        this.texture = tex
+      },
+      undefined,
+      () => {
+        console.warn(`[livemock] failed to load image ${this.mediaId}`)
+      }
+    )
+  }
+
+  update(): void {
+    /* static */
+  }
+
+  dispose(): void {
+    this.texture?.dispose()
+    this.texture = null
+  }
+}
+
+// ---------- video ----------
+
+class VideoProvider implements ScreenProvider {
+  texture: THREE.VideoTexture | null = null
+  background = new THREE.Color(0x000000)
+  private video: HTMLVideoElement
+  private source: Extract<ScreenSource, { kind: 'video' }>
+
+  constructor(source: Extract<ScreenSource, { kind: 'video' }>, mediaUrl: string) {
+    this.source = source
+    const v = document.createElement('video')
+    v.src = mediaUrl
+    v.muted = true
+    v.loop = source.loop
+    v.playbackRate = source.rate
+    v.playsInline = true
+    v.preload = 'auto'
+    this.video = v
+    void v.play().catch(() => undefined)
+    this.texture = new THREE.VideoTexture(v)
+    this.texture.colorSpace = THREE.SRGBColorSpace
+  }
+
+  update(timeSec: number, playing: boolean): void {
+    const s = this.source
+    const inRange = timeSec >= s.offsetSec
+    if (playing && inRange) {
+      if (this.video.paused) void this.video.play().catch(() => undefined)
+    } else if (!this.video.paused) {
+      this.video.pause()
+    }
+    if (!playing && inRange) {
+      // scrub: approximate frame position via seek (export uses Mediabunny)
+      const local = ((timeSec - s.offsetSec) * s.rate) % Math.max(0.1, s.trimOut - s.trimIn)
+      const target = s.trimIn + local
+      if (Math.abs(this.video.currentTime - target) > 0.08) this.video.currentTime = target
+    }
+  }
+
+  dispose(): void {
+    this.video.pause()
+    this.video.removeAttribute('src')
+    this.video.load()
+    this.texture?.dispose()
+    this.texture = null
+  }
+}
+
+// ---------- live URL ----------
+
+export class LiveProvider implements ScreenProvider {
+  texture: THREE.CanvasTexture | null = null
+  background = new THREE.Color(0x101014)
+  private canvas: HTMLCanvasElement
+  private ctx: CanvasRenderingContext2D
+  private sourceKey: string
+  private info = { scrollY: 0, scrollHeight: 1, viewportW: 0, viewportH: 0 }
+  private unsubscribe: () => void
+  private ripples: { x: number; y: number; t0: number }[] = []
+  private frameCount = 0
+
+  constructor(sourceKey: string, viewport: { w: number; h: number }, onInput: (ev: LiveInputEvent) => void) {
+    this.sourceKey = sourceKey
+    this.canvas = document.createElement('canvas')
+    this.canvas.width = viewport.w
+    this.canvas.height = viewport.h
+    this.ctx = this.canvas.getContext('2d')!
+    this.ctx.fillStyle = '#101014'
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height)
+    this.texture = new THREE.CanvasTexture(this.canvas)
+    this.texture.colorSpace = THREE.SRGBColorSpace
+
+    this.unsubscribe = window.livemock.onLiveEvent((ev: LiveEvent) => {
+      if (ev.type === 'frame' && ev.payload.sourceKey === this.sourceKey) {
+        this.drawFrame(ev.payload.width, ev.payload.height, new Uint8ClampedArray(ev.payload.data))
+      } else if (ev.type === 'info' && ev.payload.sourceKey === this.sourceKey) {
+        this.info = {
+          scrollY: ev.payload.scrollY,
+          scrollHeight: ev.payload.scrollHeight,
+          viewportW: ev.payload.viewportW,
+          viewportH: ev.payload.viewportH
+        }
+      } else if (ev.type === 'ripple' && ev.sourceKey === this.sourceKey) {
+        this.addRipple(ev.x, ev.y)
+      }
+    })
+
+    this.sendInput = (input) => onInput(input)
+  }
+
+  private drawFrame(w: number, h: number, rgba: Uint8ClampedArray): void {
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w
+      this.canvas.height = h
+    }
+    const clamped = new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.length)
+    const imageData = this.ctx.createImageData(w, h)
+    imageData.data.set(clamped)
+    this.ctx.putImageData(imageData, 0, 0)
+    this.frameCount++
+    this.texture!.needsUpdate = true
+  }
+
+  addRipple(x: number, y: number): void {
+    this.ripples.push({ x, y, t0: performance.now() })
+    if (this.ripples.length > 8) this.ripples.shift()
+  }
+
+  sendInput: (ev: LiveInputEvent) => void
+
+  getLiveInfo(): { scrollY: number; scrollHeight: number; viewportW: number; viewportH: number } | null {
+    return this.info
+  }
+
+  update(_timeSec: number, _playing: boolean): void {
+    const now = performance.now()
+    this.ripples = this.ripples.filter((r) => now - r.t0 < 650)
+    if (this.ripples.length > 0 && this.ctx) {
+      // ripples are drawn on the shared canvas; restore by re-drawing is costly,
+      // so we overlay and mark dirty only (transient UI, acceptable in preview)
+      for (const r of this.ripples) {
+        const p = (now - r.t0) / 650
+        const scale = 0.4 + p * 1.8
+        const alpha = (1 - p) * 0.55
+        this.ctx.save()
+        this.ctx.globalAlpha = alpha
+        this.ctx.strokeStyle = '#7ecbff'
+        this.ctx.lineWidth = 3
+        this.ctx.beginPath()
+        this.ctx.arc(r.x, r.y, 26 * scale, 0, Math.PI * 2)
+        this.ctx.stroke()
+        this.ctx.restore()
+      }
+      this.texture!.needsUpdate = true
+    }
+  }
+
+  dispose(): void {
+    this.unsubscribe()
+    this.texture?.dispose()
+    this.texture = null
+    void this.frameCount
+  }
+}
+
+// ---------- factory ----------
+
+export function createProvider(source: ScreenSource): ScreenProvider | null {
+  switch (source.kind) {
+    case 'none':
+      return null
+    case 'image': {
+      const url = window.livemock.mediaMediaUrl(source.mediaId)
+      return new ImageProvider(source.mediaId, url)
+    }
+    case 'video': {
+      const url = window.livemock.mediaMediaUrl(source.mediaId)
+      return new VideoProvider(source, url)
+    }
+    case 'url':
+      // Live providers are managed by the scene controller (needs a source key
+      // + IPC lifecycle); never constructed here.
+      return null
+    default:
+      return null
+  }
+}
+
+export { ImageProvider, VideoProvider }
+
+export function hashString(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  }
+  return h
+}

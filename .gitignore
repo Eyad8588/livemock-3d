@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+dist-e2e/
+playwright-report/
+test-results/
+*.log
+.DS_Store
+assets/hdri/*.hdr
+!assets/hdri/.gitkeep
+smoke-*.png

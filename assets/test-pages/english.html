@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Skyline Store — Demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    background: #f4f6fb;
+    color: #16181d;
+  }
+  header {
+    background: linear-gradient(135deg, #274690, #3b6fd4);
+    color: #fff;
+    padding: 48px 24px 56px;
+    text-align: center;
+  }
+  header h1 { margin: 0 0 8px; font-size: 34px; }
+  header p { margin: 0; opacity: .85; font-size: 16px; }
+  .cta {
+    display: inline-block; margin-top: 22px; background: #ffd166; color: #16181d;
+    font-weight: 700; padding: 12px 28px; border-radius: 999px; text-decoration: none;
+  }
+  main { max-width: 560px; margin: -28px auto 60px; padding: 0 16px; }
+  .card {
+    background: #fff; border-radius: 18px; box-shadow: 0 10px 30px rgba(20,30,60,.08);
+    padding: 18px; margin-bottom: 16px; display: flex; gap: 14px; align-items: center;
+  }
+  .thumb { width: 84px; height: 84px; border-radius: 14px; flex: none; display: grid; place-items: center; font-size: 34px; }
+  .card h3 { margin: 0 0 4px; font-size: 18px; }
+  .card p { margin: 0; color: #5c6570; font-size: 14px; }
+  .price { font-weight: 700; margin-inline-start: auto; white-space: nowrap; }
+  section.info { text-align: center; padding: 20px 8px; }
+  section.info h2 { font-size: 22px; }
+  section.info p { color: #5c6570; line-height: 1.8; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Skyline Store</h1>
+    <p>Everything for home &amp; office — same-day delivery</p>
+    <a class="cta" href="#deals">Shop now</a>
+  </header>
+  <main>
+    <div class="card">
+      <div class="thumb" style="background:#3b6fd4">🪴</div>
+      <div><h3>Monstera plant</h3><p>60 cm tall, ceramic pot included</p></div>
+      <div class="price">$39</div>
+    </div>
+    <div class="card">
+      <div class="thumb" style="background:#7a4b2e">☕</div>
+      <div><h3>Espresso set</h3><p>12 pieces, porcelain</p></div>
+      <div class="price">$65</div>
+    </div>
+    <div class="card">
+      <div class="thumb" style="background:#31507a">🪑</div>
+      <div><h3>Ergo chair</h3><p>Mesh back, adjustable height</p></div>
+      <div class="price">$185</div>
+    </div>
+    <div class="card">
+      <div class="thumb" style="background:#8a2f3c">💡</div>
+      <div><h3>Smart desk lamp</h3><p>5 brightness levels, wireless charging</p></div>
+      <div class="price">$49</div>
+    </div>
+    <section class="info">
+      <h2>Why Skyline?</h2>
+      <p>This page is rendered in a real Chromium engine, so text, layout and colors
+      export exactly as they appear on the web. Scroll down to see more.</p>
+    </section>
+    <section class="info" id="deals">
+      <h2>Weekly deals</h2>
+      <p>Up to 40% off home essentials and free shipping over $50.</p>
+    </section>
+    <section class="info">
+      <h2>Fast delivery</h2>
+      <p>From 9 AM to 11 PM, seven days a week, in all major cities.</p>
+    </section>
+  </main>
+</body>
+</html>
