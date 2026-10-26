@@ -14,6 +14,7 @@ Spec: see `SPEC.md`. Rule: **each milestone must run before starting the next.**
 | M5 | Look: 7 environments, procedural HDRI-free lighting rigs (CC0 HDRI slot), post FX (DOF/bloom/vignette/grain), motion blur accumulation, all device presets, GLB custom device import | ✅ |
 | M6 | More sources + output: window/screen mirror + macOS permission flow, walkthrough editor, modes 5–9, text overlays (Arabic), audio mux, ProRes 4444 / WebM alpha / GIF / PNG seq | ✅ |
 | M7 | Ship: EN/AR i18n + RTL, themes, shortcuts, first-run flow, sample project, electron-builder config, CI, README/CREDITS/CHANGELOG | ✅ |
+| GLB | User-supplied device presets (iPhone 17 Pro Max, MacBook Pro 16") from assets/models — protocol serving, yaw-safe rig, emissive display pick, screen quad overlay | ✅ |
 
 ## Architecture decisions
 
