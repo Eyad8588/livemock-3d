@@ -4,6 +4,7 @@ import { t, setLang, getLang, onLangChange, type Lang } from '../i18n/i18n'
 import { el, clear } from './dom'
 import { toast } from './toast'
 import { openExportDialog } from './dialogs'
+import { openModesDialog } from './modesDialog'
 
 export function mountTopbar(root: HTMLElement): void {
   const render = (): void => {
@@ -34,6 +35,7 @@ export function mountTopbar(root: HTMLElement): void {
       btn(t('top.new'), () => void newProject()),
       btn(t('top.open'), () => void openProject()),
       btn(t('top.save'), () => void saveProject()),
+      btn(t('top.modes'), () => openModesDialog(), 'accent'),
       btn(t('top.undo'), () => {
         if (!store.undo()) toast('Nothing to undo')
       }, 'ghost'),

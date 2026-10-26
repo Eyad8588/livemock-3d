@@ -1,7 +1,7 @@
 // Camera/device modes (SPEC §7). Applying a mode GENERATES editable
 // keyframes on the scene tracks — never a black box.
 
-import type { CameraTrack, DeviceInstance, Scene, Track, Vec3 } from '@shared/types'
+import type { DeviceInstance, EasingId, Scene, Track, Vec3 } from '@shared/types'
 import { getPreset, type ModeId } from '@shared/presets'
 import { trackOf } from '@shared/serialize'
 
@@ -158,18 +158,14 @@ export function applyMode(scene: Scene, mode: ModeId, opts: ModeOptions): void {
   const devs = scene.devices
   const cam = scene.camera
 
-  const setTrack = <T>(track: Track<T>, keys: { t: number; value: T; easing?: keyof typeof EASING_MAP; bezier?: [number, number, number, number] }[]): void => {
-    track.keys = keys.map((k) => ({ t: k.t, value: k.value, easing: (k.easing ?? 'easeInOutCubic') as never, ...(k.bezier ? { bezier: k.bezier } : {}) }))
+  const setTrack = <T>(track: Track<T>, keys: { t: number; value: T; easing?: EasingId; bezier?: [number, number, number, number] }[]): void => {
+    track.keys = keys.map((k) => ({
+      t: k.t,
+      value: k.value,
+      easing: k.easing ?? 'easeInOutCubic',
+      ...(k.bezier ? { bezier: k.bezier } : {})
+    }))
   }
-  const EASING_MAP = {
-    linear: 1,
-    easeInOutCubic: 1,
-    easeOutExpo: 1,
-    easeInOutSine: 1,
-    spring: 1,
-    bezier: 1
-  } as const
-  void EASING_MAP
 
   const frame = framing(devs)
   const speed = opts.speed

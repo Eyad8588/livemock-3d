@@ -115,7 +115,10 @@ async function bootstrap(): Promise<void> {
   await checkRecovery()
 
   // expose for E2E tests only (never used in production code paths)
-  ;(window as unknown as { __lmTest?: unknown }).__lmTest = { store, sceneController }
+  import('./engine/modes').then((m) => {
+    ;(window as unknown as { __lmTest?: unknown }).__lmTest = { store, sceneController }
+    ;(window as unknown as { __lmModes?: unknown }).__lmModes = { apply: m.applyMode }
+  })
 }
 
 void bootstrap()
