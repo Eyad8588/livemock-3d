@@ -4,6 +4,7 @@
 import * as THREE from 'three'
 import type { ScreenSource } from '@shared/types'
 import type { LiveEvent, LiveInputEvent } from '@shared/ipc'
+import { ExportVideoDecoder } from '../export/videoDecode'
 
 export interface ScreenProvider {
   readonly texture: THREE.Texture | null
@@ -12,6 +13,10 @@ export interface ScreenProvider {
   /** called every frame with scene time (s) */
   update(timeSec: number, playing: boolean): void
   dispose(): void
+  /** export hooks (video): decoded-frame swap */
+  beginExport?: () => Promise<void>
+  seekExport?: (timeSec: number) => Promise<void>
+  endExport?: () => void
   // live-only surface
   sendInput?(ev: LiveInputEvent): void
   getLiveInfo?(): { scrollY: number; scrollHeight: number; viewportW: number; viewportH: number } | null
@@ -63,9 +68,14 @@ class VideoProvider implements ScreenProvider {
   background = new THREE.Color(0x000000)
   private video: HTMLVideoElement
   private source: Extract<ScreenSource, { kind: 'video' }>
+  private mediaUrl: string
+  private exportDecoder: ExportVideoDecoder | null = null
+  private exportCanvas: HTMLCanvasElement | null = null
+  private exportTexture: THREE.CanvasTexture | null = null
 
   constructor(source: Extract<ScreenSource, { kind: 'video' }>, mediaUrl: string) {
     this.source = source
+    this.mediaUrl = mediaUrl
     const v = document.createElement('video')
     v.src = mediaUrl
     v.muted = true
@@ -76,6 +86,49 @@ class VideoProvider implements ScreenProvider {
     this.video = v
     void v.play().catch(() => undefined)
     this.texture = new THREE.VideoTexture(v)
+    this.texture.colorSpace = THREE.SRGBColorSpace
+  }
+
+  /** Switch to a decoded-frame canvas texture for deterministic export. */
+  async beginExport(): Promise<void> {
+    this.exportDecoder = await ExportVideoDecoder.open(this.mediaUrl)
+    if (!this.exportDecoder) return
+    const w = this.exportDecoder.width || 1080
+    const h = this.exportDecoder.height || 1920
+    this.exportCanvas = document.createElement('canvas')
+    this.exportCanvas.width = w
+    this.exportCanvas.height = h
+    this.exportTexture = new THREE.CanvasTexture(this.exportCanvas)
+    this.exportTexture.colorSpace = THREE.SRGBColorSpace
+    this.texture = this.exportTexture as unknown as THREE.VideoTexture
+  }
+
+  /** Decode + draw the exact frame for scene time `timeSec` (scene → media mapping). */
+  async seekExport(timeSec: number): Promise<void> {
+    if (!this.exportDecoder || !this.exportCanvas || !this.exportTexture) return
+    const s = this.source
+    const local = timeSec - s.offsetSec
+    if (local < 0) return
+    let mediaTime = s.trimIn + local * s.rate
+    const span = Math.max(0.1, s.trimOut - s.trimIn)
+    if (s.loop) mediaTime = s.trimIn + ((mediaTime - s.trimIn) % span)
+    else if (mediaTime > s.trimOut) mediaTime = s.trimOut
+    const ctx = this.exportCanvas.getContext('2d') as CanvasRenderingContext2D | null
+    if (!ctx) return
+    ctx.fillStyle = '#000'
+    ctx.fillRect(0, 0, this.exportCanvas.width, this.exportCanvas.height)
+    await this.exportDecoder.drawFrameAt(ctx as unknown as OffscreenCanvasRenderingContext2D, mediaTime, 0, 0, this.exportCanvas.width, this.exportCanvas.height)
+    this.exportTexture.needsUpdate = true
+  }
+
+  endExport(): void {
+    this.exportDecoder?.dispose()
+    this.exportDecoder = null
+    this.exportTexture?.dispose()
+    this.exportTexture = null
+    this.exportCanvas = null
+    // restore live preview texture
+    this.texture = new THREE.VideoTexture(this.video)
     this.texture.colorSpace = THREE.SRGBColorSpace
   }
 

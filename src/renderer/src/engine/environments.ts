@@ -10,6 +10,8 @@ export interface EnvRig {
   /** when true, renderer clear alpha stays 1 and scene.background is set */
   hasBackground: boolean
   update(settings: EnvironmentSettings): void
+  /** hide backdrops/floors for transparent exports (lights stay on) */
+  setBackdropVisible(visible: boolean): void
   dispose(): void
 }
 
@@ -204,6 +206,11 @@ export function createEnvironment(_renderer: THREE.WebGLRenderer): EnvRig {
     group,
     hasBackground: true,
     update,
+    setBackdropVisible: (visible: boolean) => {
+      for (const child of group.children) {
+        if (child instanceof THREE.Mesh) child.visible = visible
+      }
+    },
     dispose: () => {
       clearGroup()
     }

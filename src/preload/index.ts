@@ -67,14 +67,19 @@ const api: LiveMockPreloadApi = {
   captureOpenPermissionSettings: (): Promise<void> => ipcRenderer.invoke(IPC.CaptureOpenPermissionSettings),
 
   exportVerify: (path: string): Promise<VerifyResult> => ipcRenderer.invoke(IPC.ExportVerify, path),
-  exportFfmpegConnect: (): Promise<MessagePort> =>
-    new Promise((resolve) => {
-      const channel = new MessageChannel()
-      const { port1, port2 } = channel
-      ipcRenderer.postMessage('export:ffmpeg-connect', null, [port2])
-      port1.start()
-      resolve(port1)
-    }),
+  writeExportOutput: (req: import('../shared/ipc').WriteExportRequest): Promise<import('../shared/ipc').WriteExportResult> =>
+    ipcRenderer.invoke(IPC.ExportWriteOutput, req),
+  exportFfmpegStart: (handshake: unknown): Promise<{ jobId: string } | { error: string }> =>
+    ipcRenderer.invoke('export:ffmpeg-start', handshake),
+  exportFfmpegFrame: (jobId: string, data: ArrayBuffer): void => {
+    ipcRenderer.send('export:ffmpeg-frame', jobId, data)
+  },
+  exportFfmpegEnd: (jobId: string): void => {
+    ipcRenderer.send('export:ffmpeg-end', jobId)
+  },
+  exportFfmpegCancel: (jobId: string): void => {
+    ipcRenderer.send(IPC.ExportFfmpegCancel, jobId)
+  },
   onExportFfmpegEvent: (cb: (ev: ExportFfmpegEvent) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: ExportFfmpegEvent): void => cb(ev)
     ipcRenderer.on(IPC.ExportFfmpegEvent, listener)

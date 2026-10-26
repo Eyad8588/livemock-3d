@@ -3,7 +3,7 @@ import { store } from '../state/store'
 import { t, setLang, getLang, onLangChange, type Lang } from '../i18n/i18n'
 import { el, clear } from './dom'
 import { toast } from './toast'
-import { openExportDialog } from './dialogs'
+import { openExportDialog } from './exportDialog'
 import { openModesDialog } from './modesDialog'
 
 export function mountTopbar(root: HTMLElement): void {

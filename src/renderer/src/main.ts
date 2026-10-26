@@ -79,7 +79,7 @@ async function bootstrap(): Promise<void> {
     }
     if (meta && e.key.toLowerCase() === 'e') {
       e.preventDefault()
-      import('./ui/dialogs').then((m) => m.openExportDialog())
+      import('./ui/exportDialog').then((m) => m.openExportDialog())
       return
     }
     switch (e.key) {
@@ -115,8 +115,15 @@ async function bootstrap(): Promise<void> {
   await checkRecovery()
 
   // expose for E2E tests only (never used in production code paths)
-  import('./engine/modes').then((m) => {
-    ;(window as unknown as { __lmTest?: unknown }).__lmTest = { store, sceneController }
+  void Promise.all([import('./engine/modes'), import('./export/exporter')]).then(([m, ex]) => {
+    ;(window as unknown as { __lmTest?: unknown }).__lmTest = {
+      store,
+      sceneController,
+      export: (settings: Parameters<typeof ex.startExport>[0], onProgress?: (p: unknown) => void) => {
+        const handle = ex.startExport(settings, store.scene, (p) => onProgress?.(p))
+        return handle.promise
+      }
+    }
     ;(window as unknown as { __lmModes?: unknown }).__lmModes = { apply: m.applyMode }
   })
 }

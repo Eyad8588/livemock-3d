@@ -58,6 +58,7 @@ export const IPC = {
   ExportFfmpegCancel: 'export:ffmpeg-cancel',
   ExportFfmpegEvent: 'export:ffmpeg-event', // main -> renderer
   ExportVerify: 'export:verify',
+  ExportWriteOutput: 'export:write-output',
 
   // misc
   DialogChooseDir: 'dialog:choose-dir',
@@ -167,6 +168,22 @@ export type ExportFfmpegEvent =
   | { type: 'done'; jobId: string; outputPath: string; verification?: string }
   | { type: 'error'; jobId: string; message: string }
 
+export interface WriteExportRequest {
+  bytes: ArrayBuffer
+  projectName: string
+  sceneName: string
+  width: number
+  height: number
+  fps: number
+  ext: string
+}
+export interface WriteExportResult {
+  ok: boolean
+  path?: string
+  verification?: string
+  error?: string
+}
+
 export interface VerifyResult {
   ok: boolean
   width?: number
@@ -256,8 +273,12 @@ export interface LiveMockPreloadApi {
   captureOpenPermissionSettings(): Promise<void>
 
   exportVerify(path: string): Promise<VerifyResult>
-  /** Opens a MessagePort; renderer drives frame streaming itself. */
-  exportFfmpegConnect(): Promise<MessagePort>
+  writeExportOutput(req: WriteExportRequest): Promise<WriteExportResult>
+  /** ffmpeg-backed export: start job, stream raw chunks, finish. */
+  exportFfmpegStart(handshake: unknown): Promise<{ jobId: string } | { error: string }>
+  exportFfmpegFrame(jobId: string, data: ArrayBuffer): void
+  exportFfmpegEnd(jobId: string): void
+  exportFfmpegCancel(jobId: string): void
   onExportFfmpegEvent(cb: (ev: ExportFfmpegEvent) => void): () => void
 
   chooseDirectory(): Promise<string | null>

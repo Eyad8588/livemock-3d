@@ -3,7 +3,6 @@
 
 import * as fs from 'node:fs'
 import ffmpegStatic from 'ffmpeg-static'
-import ffprobeStatic from 'ffprobe-static'
 
 function resolveFfmpeg(): string | null {
   const mod = ffmpegStatic as unknown as string | { default?: string }
@@ -11,21 +10,14 @@ function resolveFfmpeg(): string | null {
   return p && fs.existsSync(p) ? p : null
 }
 
-function resolveFfprobe(): string | null {
-  const mod = ffprobeStatic as unknown as { path?: string; default?: { path?: string } }
-  const p = mod?.path ?? mod?.default?.path ?? null
-  return p && fs.existsSync(p) ? p : null
-}
-
 let ffmpegCache: string | null | undefined
-let ffprobeCache: string | null | undefined
 
 export function ffmpegPath(): string | null {
   ffmpegCache ??= resolveFfmpeg()
   return ffmpegCache
 }
 
+/** ffprobe is not shipped (broken upstream binaries); ffmpeg banner parsing is used instead. */
 export function ffprobePath(): string | null {
-  ffprobeCache ??= resolveFfprobe()
-  return ffprobeCache
+  return ffmpegPath()
 }

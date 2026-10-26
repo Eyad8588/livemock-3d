@@ -355,6 +355,33 @@ function registerIpc(): void {
     const p = assertString(payload, 'path', 4096)
     return verifyWithFfprobe(p)
   })
+
+  handle<import('../shared/ipc').WriteExportResult>(IPC.ExportWriteOutput, async (payload) => {
+    if (!isRecord(payload) || !(payload.bytes instanceof ArrayBuffer) || typeof payload.projectName !== 'string') {
+      return { ok: false, error: 'bad payload' }
+    }
+    const req = payload as unknown as import('../shared/ipc').WriteExportRequest
+    const { buildExportFilename } = await import('../shared/exportUtils')
+    const name = buildExportFilename(req.projectName, req.sceneName, req.width, req.height, req.fps, assertString(req.ext, 'ext', 8))
+    const downloads = path.join(process.env.HOME ?? process.env.USERPROFILE ?? '.', 'Downloads', 'LiveMock')
+    let target = path.join(downloads, name)
+    if (!fs.existsSync(downloads)) {
+      fs.mkdirSync(downloads, { recursive: true })
+    }
+    let i = 2
+    while (fs.existsSync(target)) {
+      const dot = name.lastIndexOf('.')
+      target = path.join(downloads, `${name.slice(0, dot)}_${i}${name.slice(dot)}`)
+      i++
+    }
+    try {
+      fs.writeFileSync(target, Buffer.from(req.bytes))
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+    const verification = await verifyWithFfprobe(target, { width: req.width, height: req.height, fps: req.fps })
+    return { ok: true, path: target, verification: verification.humanReport }
+  })
   ipcMain.on(IPC.ExportFfmpegCancel, (_e, jobId: unknown) => {
     if (typeof jobId === 'string') cancelExport(jobId)
   })

@@ -400,6 +400,41 @@ class SceneController {
   }
 
   // ---------- evaluation ----------
+  /** Evaluate all tracks + providers at an exact time (used by export too). */
+  prepareFrame(timeSec: number): void {
+    let t = timeSec
+    const dur = store.scene.durationSec
+    if (t > dur) t = dur
+    for (const dev of store.scene.devices) {
+      const rig = this.rigs.get(dev.id)
+      if (!rig) continue
+      const transform = evalTrack(dev.transform, t) ?? dev.transform.keys[0]?.value
+      if (transform) {
+        applyTransform(rig, transform, dev.lidAngleDeg ? evalTrack(dev.lidAngleDeg, t) : 105)
+      }
+    }
+    const cam = store.scene.camera
+    const pos = evalTrack(cam.position, t)
+    const target = evalTrack(cam.target, t)
+    const fov = evalTrack(cam.fov, t)
+    if (pos && target) {
+      this.camera.position.set(pos.x, pos.y, pos.z)
+      this.camera.lookAt(target.x, target.y, target.z)
+      this.controls?.target.set(target.x, target.y, target.z)
+    }
+    if (fov !== undefined) this.camera.fov = fov
+    this.camera.updateProjectionMatrix()
+    for (const p of this.providers.values()) p.update(t, true)
+  }
+
+  setBackdropVisible(visible: boolean): void {
+    this.envRig?.setBackdropVisible(visible)
+  }
+
+  providerFor(deviceId: string): ScreenProvider | null {
+    return this.providers.get(deviceId) ?? null
+  }
+
   private async evaluateTime(): Promise<void> {
     const t = store.time
     for (const dev of store.scene.devices) {
@@ -476,7 +511,10 @@ class SceneController {
     this.camera.updateProjectionMatrix()
   }
 
-  /** Render one frame at target resolution into an offscreen target (export). */
+  /**
+   * Render one frame at target resolution into an offscreen target (export).
+   * Returns bottom-up RGBA pixels.
+   */
   renderToTarget(width: number, height: number): Uint8Array | null {
     if (!this.renderer) return null
     const target = new THREE.WebGLRenderTarget(width, height, {
@@ -484,12 +522,37 @@ class SceneController {
       colorSpace: THREE.SRGBColorSpace
     })
     this.renderer.setRenderTarget(target)
+    this.renderer.setClearAlpha(0)
     this.renderer.render(this.scene, this.camera)
     const buf = new Uint8Array(width * height * 4)
     this.renderer.readRenderTargetPixels(target, 0, 0, width, height, buf)
     this.renderer.setRenderTarget(null)
     target.dispose()
     return buf
+  }
+
+  /** Compose one export frame (with optional motion-blur accumulation) into a canvas. */
+  renderExportFrame(canvas: OffscreenCanvas, timeSec: number, samples: number): void {
+    const ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D
+    const w = canvas.width
+    const h = canvas.height
+    if (samples <= 1) {
+      this.prepareFrame(timeSec)
+      const buf = this.renderToTarget(w, h)
+      if (buf) putPixelsFlipped(ctx, buf, w, h)
+      return
+    }
+    const acc = new Float64Array(w * h * 4)
+    for (let s = 0; s < samples; s++) {
+      const st = timeSec + (s / samples - 0.5) / store.scene.fps
+      this.prepareFrame(st)
+      const buf = this.renderToTarget(w, h)
+      if (!buf) continue
+      for (let i = 0; i < acc.length; i++) acc[i] = (acc[i] ?? 0) + (buf[i] ?? 0)
+    }
+    const out = new Uint8ClampedArray(acc.length)
+    for (let i = 0; i < acc.length; i++) out[i] = acc[i]! / samples
+    putPixelsFlipped(ctx, new Uint8Array(out.buffer as ArrayBuffer), w, h)
   }
 
   dispose(): void {
@@ -510,6 +573,17 @@ class SceneController {
 
 export const sceneController = new SceneController()
 export type { LiveFramePayload }
+
+/** WebGL reads bottom-up; flip rows into a 2D context. */
+function putPixelsFlipped(ctx: OffscreenCanvasRenderingContext2D, buf: Uint8Array, w: number, h: number): void {
+  const img = new ImageData(w, h)
+  const rowBytes = w * 4
+  for (let y = 0; y < h; y++) {
+    const src = (h - 1 - y) * rowBytes
+    img.data.set(buf.subarray(src, src + rowBytes), y * rowBytes)
+  }
+  ctx.putImageData(img, 0, 0)
+}
 
 function screenSig(dev: DeviceInstance): string {
   return JSON.stringify(dev.screen)

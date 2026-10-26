@@ -9,7 +9,7 @@ import * as crypto from 'node:crypto'
 import { zipSync, unzipSync, type Zippable } from 'fflate'
 import { migrate } from '../shared/serialize'
 import type { MediaEntry } from '../shared/types'
-import { probeImageFile, probeWithFfprobe } from './mediaProbe'
+import { probeImageFile, probeWithFfmpeg } from './mediaProbe'
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
 const VIDEO_EXT = new Set(['mp4', 'mov', 'webm', 'm4v', 'mkv'])
@@ -129,7 +129,7 @@ export async function importMediaFromPaths(paths: string[]): Promise<MediaEntry[
       width = dim?.width
       height = dim?.height
     } else if (kind === 'video' || kind === 'audio') {
-      const probe = await probeWithFfprobe(dest)
+      const probe = await probeWithFfmpeg(dest)
       width = probe?.width
       height = probe?.height
       durationSec = probe?.durationSec

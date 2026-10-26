@@ -1,14 +1,44 @@
-// Media probing: pure header parsing for images + ffprobe for A/V.
+// Media probing via the bundled ffmpeg binary (ffprobe-static ships broken
+// binaries on some platforms, so we parse `ffmpeg -i` stderr instead).
 
-import { buildFfprobeArgs } from '../shared/exportUtils'
+import { spawn } from 'node:child_process'
+import { ffmpegPath } from './ffmpegProc'
 
-export interface ImageDim {
-  width: number
-  height: number
+export interface ProbeInfo {
+  width?: number
+  height?: number
+  durationSec?: number
+  fps?: number
+  codec?: string
+  hasVideo?: boolean
+  hasAudio?: boolean
 }
 
-/** Parse PNG/JPEG/WebP/GIF headers. Returns null when unrecognized. */
-export function probeImageFile(buf: Buffer): ImageDim | null {
+/** Run `ffmpeg -i <file>` and parse the banner. Exits 1 by design. */
+export function probeWithFfmpeg(file: string, timeoutMs = 15000): Promise<ProbeInfo | null> {
+  const bin = ffmpegPath()
+  if (!bin) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const p = spawn(bin, ['-hide_banner', '-i', file], { stdio: ['ignore', 'ignore', 'pipe'] })
+    let err = ''
+    p.stderr?.on('data', (d: Buffer) => (err += d.toString()))
+    const timer = setTimeout(() => {
+      p.kill('SIGKILL')
+      resolve(null)
+    }, timeoutMs)
+    p.on('error', () => {
+      clearTimeout(timer)
+      resolve(null)
+    })
+    p.on('close', () => {
+      clearTimeout(timer)
+      resolve(parseFfmpegBanner(err))
+    })
+  })
+}
+
+/** Parse dimensions from image headers (PNG/JPEG/WebP/GIF). */
+export function probeImageFile(buf: Buffer): { width: number; height: number } | null {
   try {
     if (buf.length >= 33 && buf.readUInt32BE(0) === 0x89504e47) {
       return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) } // IHDR
@@ -32,7 +62,6 @@ export function probeImageFile(buf: Buffer): ImageDim | null {
       }
     }
     if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) {
-      // JPEG: scan segments for SOFn
       let off = 2
       while (off + 9 < buf.length) {
         if (buf[off] !== 0xff) {
@@ -53,56 +82,34 @@ export function probeImageFile(buf: Buffer): ImageDim | null {
   return null
 }
 
-export interface AvProbe {
-  width?: number
-  height?: number
-  durationSec?: number
-  fps?: number
-  codec?: string
-}
-
-export async function probeWithFfprobe(file: string): Promise<AvProbe | null> {
-  const { ffprobePath } = await import('./ffmpegProc')
-  const bin = ffprobePath()
-  if (!bin) return null
-  const { spawn } = await import('node:child_process')
-  return new Promise((resolve) => {
-    const p = spawn(bin, buildFfprobeArgs(file), { stdio: ['ignore', 'pipe', 'ignore'] })
-    let out = ''
-    p.stdout.on('data', (d: Buffer) => (out += d.toString()))
-    p.on('error', () => resolve(null))
-    p.on('close', (code) => {
-      if (code !== 0) return resolve(null)
-      try {
-        const json = JSON.parse(out) as {
-          streams?: {
-            codec_type?: string
-            width?: number
-            height?: number
-            avg_frame_rate?: string
-            codec_name?: string
-          }[]
-          format?: { duration?: string }
-        }
-        const video = json.streams?.find((s) => s.codec_type === 'video')
-        const audio = json.streams?.find((s) => s.codec_type === 'audio')
-        const stream = video ?? audio
-        let fps: number | undefined
-        const rate = video?.avg_frame_rate
-        if (rate && rate.includes('/')) {
-          const [num, den] = rate.split('/').map(Number)
-          if (num && den) fps = num / den
-        }
-        resolve({
-          width: video?.width,
-          height: video?.height,
-          durationSec: json.format?.duration ? Number(json.format.duration) : undefined,
-          fps,
-          codec: stream?.codec_name
-        })
-      } catch {
-        resolve(null)
+export function parseFfmpegBanner(banner: string): ProbeInfo | null {
+  try {
+    const durMatch = banner.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/)
+    let durationSec: number | undefined
+    if (durMatch) {
+      durationSec = Number(durMatch[1]) * 3600 + Number(durMatch[2]) * 60 + Number(durMatch[3])
+    }
+    const videoLine = banner.split('\n').find((l) => l.includes('Video:'))
+    const audioLine = banner.split('\n').find((l) => l.includes('Audio:'))
+    if (!videoLine && !audioLine) return null
+    const info: ProbeInfo = { hasVideo: !!videoLine, hasAudio: !!audioLine, durationSec }
+    if (videoLine) {
+      const codec = videoLine.match(/Video:\s*([a-zA-Z0-9_]+)/)
+      if (codec) info.codec = codec[1]
+      const res = videoLine.match(/(\d{2,5})x(\d{2,5})/)
+      if (res) {
+        info.width = Number(res[1])
+        info.height = Number(res[2])
       }
-    })
-  })
+      const fps = videoLine.match(/([\d.]+)\s*fps/) ?? videoLine.match(/([\d.]+)\s*tbr/)
+      if (fps) info.fps = Number(fps[1])
+    }
+    if (audioLine) {
+      const codec = audioLine.match(/Audio:\s*([a-zA-Z0-9_]+)/)
+      if (codec && !info.codec) info.codec = codec[1]
+    }
+    return info
+  } catch {
+    return null
+  }
 }
