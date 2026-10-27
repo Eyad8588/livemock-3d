@@ -10,6 +10,8 @@ export interface ScreenProvider {
   readonly texture: THREE.Texture | null
   /** background color for 'fit' letterboxing */
   readonly background: THREE.Color
+  /** content aspect (w/h) once known — drives fit/cover UV mapping */
+  contentAspect: number | null
   /** called every frame with scene time (s) */
   update(timeSec: number, playing: boolean): void
   dispose(): void
@@ -32,6 +34,7 @@ export function isLiveSource(s: ScreenSource): s is Extract<ScreenSource, { kind
 class ImageProvider implements ScreenProvider {
   texture: THREE.Texture | null = null
   background = new THREE.Color(0x000000)
+  contentAspect: number | null = null
   private mediaId: string
 
   constructor(mediaId: string, mediaUrl: string) {
@@ -43,6 +46,8 @@ class ImageProvider implements ScreenProvider {
       (tex) => {
         tex.colorSpace = THREE.SRGBColorSpace
         this.texture = tex
+        const img = tex.image as { width?: number; height?: number }
+        if (img?.width && img?.height) this.contentAspect = img.width / img.height
       },
       undefined,
       () => {
@@ -66,6 +71,7 @@ class ImageProvider implements ScreenProvider {
 class VideoProvider implements ScreenProvider {
   texture: THREE.VideoTexture | null = null
   background = new THREE.Color(0x000000)
+  contentAspect: number | null = null
   private video: HTMLVideoElement
   private source: Extract<ScreenSource, { kind: 'video' }>
   private mediaUrl: string
@@ -85,6 +91,9 @@ class VideoProvider implements ScreenProvider {
     v.preload = 'auto'
     this.video = v
     void v.play().catch(() => undefined)
+    v.addEventListener('loadedmetadata', () => {
+      if (v.videoWidth && v.videoHeight) this.contentAspect = v.videoWidth / v.videoHeight
+    })
     this.texture = new THREE.VideoTexture(v)
     this.texture.colorSpace = THREE.SRGBColorSpace
   }
@@ -100,6 +109,7 @@ class VideoProvider implements ScreenProvider {
     this.exportCanvas.height = h
     this.exportTexture = new THREE.CanvasTexture(this.exportCanvas)
     this.exportTexture.colorSpace = THREE.SRGBColorSpace
+    this.contentAspect = this.exportCanvas.width / this.exportCanvas.height
     this.texture = this.exportTexture as unknown as THREE.VideoTexture
   }
 
@@ -162,6 +172,7 @@ class VideoProvider implements ScreenProvider {
 export class LiveProvider implements ScreenProvider {
   texture: THREE.CanvasTexture | null = null
   background = new THREE.Color(0x101014)
+  contentAspect: number | null = null
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
   private sourceKey: string
@@ -199,15 +210,24 @@ export class LiveProvider implements ScreenProvider {
     this.sendInput = (input) => onInput(input)
   }
 
+  private buf: HTMLCanvasElement | null = null
+
   private drawFrame(w: number, h: number, rgba: Uint8ClampedArray): void {
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w
-      this.canvas.height = h
+    // blit into an intermediate buffer at frame size, then scale into the
+    // STABLE fixed-size canvas — resizing the texture-backed canvas every
+    // time the preview scale changes corrupts the GPU upload
+    if (!this.buf || this.buf.width !== w || this.buf.height !== h) {
+      this.buf = document.createElement('canvas')
+      this.buf.width = w
+      this.buf.height = h
+      this.contentAspect = w / h
     }
+    const bctx = this.buf.getContext('2d')!
     const clamped = new Uint8ClampedArray(rgba.buffer as ArrayBuffer, rgba.byteOffset, rgba.length)
-    const imageData = this.ctx.createImageData(w, h)
+    const imageData = bctx.createImageData(w, h)
     imageData.data.set(clamped)
-    this.ctx.putImageData(imageData, 0, 0)
+    bctx.putImageData(imageData, 0, 0)
+    this.ctx.drawImage(this.buf, 0, 0, this.canvas.width, this.canvas.height)
     this.frameCount++
     this.texture!.needsUpdate = true
   }

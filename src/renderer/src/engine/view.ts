@@ -81,10 +81,11 @@ class SceneController {
       if (!dev || !rig) return
       const p = rig.root.position
       const r = rig.root.rotation
+      const sc = rig.root.scale
       this.applyDeviceTransformFromGizmo(dev.id, {
         position: { x: p.x, y: p.y, z: p.z },
         rotation: { x: THREE.MathUtils.radToDeg(r.x), y: THREE.MathUtils.radToDeg(r.y), z: THREE.MathUtils.radToDeg(r.z) },
-        scale: { x: 1, y: 1, z: 1 }
+        scale: { x: sc.x, y: sc.y, z: sc.z }
       })
     })
 
@@ -94,6 +95,11 @@ class SceneController {
     this.unsubscribers.push(
       store.on('project', () => this.syncDevices()),
       store.on('selection', () => this.syncGizmo()),
+      store.on('frame', () => {
+        const id = store.frameRequest
+        store.frameRequest = null
+        if (id) window.setTimeout(() => this.frameDevice(id), 450)
+      }),
       store.on('time', () => void this.evaluateTime()),
       store.on('playback', () => {
         if (store.playing) {
@@ -208,6 +214,22 @@ class SceneController {
     deviceId: string,
     t: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } }
   ): void {
+    if (this.snapOn) {
+      // 10mm translation grid, 15° rotation steps
+      t = {
+        ...t,
+        position: {
+          x: Math.round(t.position.x / 10) * 10,
+          y: Math.round(t.position.y / 10) * 10,
+          z: Math.round(t.position.z / 10) * 10
+        },
+        rotation: {
+          x: Math.round(t.rotation.x / 15) * 15,
+          y: Math.round(t.rotation.y / 15) * 15,
+          z: Math.round(t.rotation.z / 15) * 15
+        }
+      }
+    }
     // gizmo edits write a single keyframe at current time (no history spam while dragging)
     store.edit('Move device', (p) => {
       for (const s of p.scenes) {
@@ -261,7 +283,11 @@ class SceneController {
         this.scene.add(placeholder.root)
         this.rigs.set(dev.id, placeholder)
         const modelUrl = dev.customModelMediaId ? window.livemock.mediaMediaUrl(dev.customModelMediaId) : presetModelUrl!
-        void buildCustomDevice(modelUrl, preset.targetSizeMm, preset.modelRotationYDeg ?? 0).then((custom) => {
+        void buildCustomDevice(modelUrl, {
+          targetSizeMm: preset.targetSizeMm,
+          rotationYDeg: preset.modelRotationYDeg ?? 0,
+          enableLid: preset.kind === 'laptop'
+        }).then((custom) => {
           const current = this.rigs.get(dev.id)
           if (!custom || current !== placeholder) {
             if (custom && current !== placeholder) custom.dispose()
@@ -329,7 +355,7 @@ class SceneController {
   private updateGlare(dev: DeviceInstance, rig: DeviceRig): void {
     if (!rig.glareMesh) return
     const mat = rig.glareMesh.material as THREE.MeshPhysicalMaterial
-    mat.opacity = dev.screenGlare * 0.45
+    mat.opacity = dev.screenGlare * 0.22
     mat.transmission = 0.9 - dev.screenGlare * 0.3
     mat.needsUpdate = true
   }
@@ -518,6 +544,89 @@ class SceneController {
     this.camera.updateProjectionMatrix()
   }
 
+  /** Map content onto the screen plane honoring the fit mode (fill/fit/crop). */
+  private applyScreenFits(): void {
+    for (const dev of store.scene.devices) {
+      const provider = this.providers.get(dev.id)
+      const rig = this.rigs.get(dev.id)
+      if (!provider || !rig || !provider.texture) continue
+      if (provider.contentAspect === null || (provider as unknown as { __fitDone?: boolean }).__fitDone === true) continue
+      const mat = rig.screenMesh.material as THREE.MeshBasicMaterial
+      if (mat.map !== provider.texture) continue
+      const fit = dev.screen.kind === 'image' || dev.screen.kind === 'video' ? dev.screen.fit : 'fill'
+      const screenAspect = rig.screenWmm / Math.max(1, rig.screenHmm)
+      const ca = provider.contentAspect
+      const tex = provider.texture
+      tex.repeat.set(1, 1)
+      tex.offset.set(0, 0)
+      tex.wrapS = THREE.ClampToEdgeWrapping
+      tex.wrapT = THREE.ClampToEdgeWrapping
+      if (fit !== 'fill' && ca > 0 && screenAspect > 0) {
+        const wider = ca > screenAspect // content wider than screen
+        if (fit === 'fit') {
+          // contain + letterbox
+          if (wider) {
+            tex.repeat.set(1, screenAspect / ca)
+            tex.offset.set(0, (1 - screenAspect / ca) / 2)
+          } else {
+            tex.repeat.set(ca / screenAspect, 1)
+            tex.offset.set((1 - ca / screenAspect) / 2, 0)
+          }
+        } else {
+          // crop = cover
+          if (wider) {
+            tex.repeat.set(screenAspect / ca, 1)
+            tex.offset.set((1 - screenAspect / ca) / 2, 0)
+          } else {
+            tex.repeat.set(1, ca / screenAspect)
+            tex.offset.set(0, (1 - ca / screenAspect) / 2)
+          }
+        }
+      }
+      ;(provider as unknown as { __fitDone?: boolean }).__fitDone = provider.contentAspect !== null
+      mat.needsUpdate = true
+    }
+  }
+
+  private snapOn = true
+
+  setSnap(on: boolean): void {
+    this.snapOn = on
+  }
+
+  /** Point the camera at a device so it fills the viewport nicely. */
+  frameDevice(deviceId: string): void {
+    const rig = this.rigs.get(deviceId)
+    if (!rig || !this.container) return
+    const box = new THREE.Box3().setFromObject(rig.root)
+    const center = box.getCenter(new THREE.Vector3())
+    const size = box.getSize(new THREE.Vector3())
+    const radius = Math.max(60, Math.max(size.x, size.y, size.z) * 0.62)
+    const dist = radius / Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * 1.12
+    const dir = new THREE.Vector3(0.12, 0.32, 1).normalize()
+    this.camera.position.copy(center).add(dir.multiplyScalar(dist))
+    this.controls?.target.copy(center)
+    this.camera.lookAt(center)
+    this.controls?.update()
+  }
+
+  /** Nudge the selected device along an axis (viewport arrow keys). */
+  nudgeSelected(dx: number, dy: number, dz: number): void {
+    const dev = store.selectedDevice()
+    if (!dev) return
+    store.edit('Nudge device', (p) => {
+      for (const s of p.scenes) {
+        const d = s.devices.find((x) => x.id === dev.id)
+        const kv = d?.transform.keys[0]
+        if (kv) {
+          kv.value.position.x += dx
+          kv.value.position.y += dy
+          kv.value.position.z += dz
+        }
+      }
+    })
+  }
+
   // ---------- loop ----------
   private loop = (): void => {
     this.raf = requestAnimationFrame(this.loop)
@@ -542,6 +651,7 @@ class SceneController {
     }
 
     for (const p of this.providers.values()) p.update(store.time, store.playing)
+    this.applyScreenFits()
     if (!store.playing && this.cameraWasPlaying) {
       this.cameraWasPlaying = false
       void this.evaluateTime()

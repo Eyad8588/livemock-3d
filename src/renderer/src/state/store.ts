@@ -11,7 +11,7 @@ export interface Command {
   redo(): void
 }
 
-type StoreEvent = 'project' | 'time' | 'selection' | 'playback'
+type StoreEvent = 'project' | 'time' | 'selection' | 'playback' | 'frame'
 
 class Store {
   project: Project = createDefaultProject()
@@ -23,6 +23,7 @@ class Store {
   loop = true
   filePath: string | null = null
   dirty = false
+  frameRequest: string | null = null
 
   private undoStack: Command[] = []
   private redoStack: Command[] = []
@@ -127,7 +128,32 @@ class Store {
     const preset = getPreset(presetId)
     const count = this.scene.devices.length
     if (count >= 4) return
-    const spread = count === 0 ? 0 : ((count % 2 === 0 ? 1 : -1) * Math.ceil(count / 2) * (preset.kind === 'phone' ? 110 : 380))
+    // place side by side with real gaps: walk existing devices and put the new
+    // one just past the right-most edge (+ its own half width)
+    const widthOf = (d: DeviceInstance): number => {
+      try {
+        return getPreset(d.presetId).body.w
+      } catch {
+        return 100
+      }
+    }
+    let maxX = -Infinity
+    let minWidth = 0
+    for (const d of this.scene.devices) {
+      const t = d.transform.keys[0]?.value
+      const half = widthOf(d) / 2
+      maxX = Math.max(maxX, (t?.position.x ?? 0) + half)
+      minWidth = widthOf(d)
+    }
+    const halfNew = preset.body.w / 2
+    let x = 0
+    if (count > 0) {
+      if (!Number.isFinite(maxX)) maxX = 0
+      x = maxX + halfNew + 50
+    } else if (preset.kind === 'laptop' || preset.kind === 'monitor') {
+      x = 0
+    }
+    void minWidth
     const standY =
       preset.modelFile || (preset.kind !== 'phone' && preset.kind !== 'tablet')
         ? 0
@@ -143,13 +169,13 @@ class Store {
           keys: [
             {
               t: 0,
-              value: { position: { x: spread, y: standY, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+              value: { position: { x, y: standY, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
               easing: 'easeInOutCubic'
             }
           ]
         },
         screen: { kind: 'none' },
-        screenGlare: 0.25,
+        screenGlare: preset.modelFile ? 0.08 : 0.25,
         cutout: preset.cutout,
         ...(preset.kind === 'laptop' ? { lidAngleDeg: { keys: [{ t: 0, value: 105, easing: 'easeInOutCubic' }] } } : {})
       })
@@ -157,6 +183,8 @@ class Store {
     const scene = this.scene
     this.selectedDeviceId = scene.devices[scene.devices.length - 1]?.id ?? null
     this.emit('selection')
+    this.frameRequest = this.selectedDeviceId
+    this.emit('frame')
   }
 
   removeDevice(id: string): void {
@@ -167,6 +195,27 @@ class Store {
       this.selectedDeviceId = null
       this.emit('selection')
     }
+  }
+
+  setLidAngle(id: string, angle: number): void {
+    this.edit('Lid angle', (p) => {
+      for (const s of p.scenes) {
+        const d = s.devices.find((x) => x.id === id)
+        if (!d) continue
+        if (!d.lidAngleDeg) d.lidAngleDeg = { keys: [{ t: 0, value: angle, easing: 'easeInOutCubic' }] }
+        else {
+          const keys = d.lidAngleDeg.keys
+          const first = keys[0]
+          if (first && keys.length === 1 && first.t === 0) first.value = angle
+          else {
+            const existing = keys.find((k) => Math.abs(k.t - this.time) < 1 / 60)
+            if (existing) existing.value = angle
+            else keys.push({ t: this.time, value: angle, easing: 'easeInOutCubic' })
+            keys.sort((a, b) => a.t - b.t)
+          }
+        }
+      }
+    })
   }
 
   setDeviceScreen(id: string, source: ScreenSource): void {

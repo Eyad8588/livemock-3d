@@ -57,8 +57,49 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  const hint = el('div', { class: 'viewport-hint' }, 'Drag = orbit · Scroll = zoom · Right-drag = pan · Drop media onto a device')
+  const hint = el('div', { class: 'viewport-hint' }, 'Drag = orbit · Scroll = zoom · Right-drag = pan · Drop media onto a device · G/R/S = move/rotate/scale · F = frame')
   viewport.appendChild(hint)
+
+  // transform toolbar
+  const toolbar = el('div', {
+    style:
+      'position:absolute;top:8px;left:10px;display:flex;gap:6px;align-items:center;background:color-mix(in srgb, var(--bg-2) 85%, transparent);border:1px solid var(--border);border-radius:9px;padding:4px 6px;backdrop-filter:blur(6px)'
+  })
+  let snapOn = true
+  const mkTool = (label: string, title: string, fn: () => void, id: string): HTMLElement => {
+    const b = el('button', { title, onclick: fn, style: 'padding:3px 9px;font-size:12px' }, label)
+    b.dataset['tool'] = id
+    return b
+  }
+  const markActive = (id: string): void => {
+    for (const b of toolbar.querySelectorAll('button')) {
+      if (b.dataset['tool']) {
+        b.classList.toggle('primary', b.dataset['tool'] === id)
+        b.classList.toggle('accent', b.dataset['tool'] === id)
+      }
+    }
+  }
+  const setMode = (mode: 'translate' | 'rotate' | 'scale'): void => {
+    sceneController.setGizmoMode(mode)
+    markActive(mode)
+  }
+  toolbar.append(
+    mkTool('↔ Move', 'Move (G)', () => setMode('translate'), 'translate'),
+    mkTool('⟳ Rotate', 'Rotate (R)', () => setMode('rotate'), 'rotate'),
+    mkTool('⤢ Scale', 'Scale (S)', () => setMode('scale'), 'scale'),
+    el('span', { style: 'width:6px' }),
+    mkTool('⊞ Snap', 'Snap to grid (10mm / 15°)', () => {
+      snapOn = !snapOn
+      sceneController.setSnap(snapOn)
+      toolbar.children[4]?.classList.toggle('accent', snapOn)
+    }, 'snap'),
+    mkTool('⤢ Frame', 'Frame selected (F)', () => {
+      const id = store.selectedDeviceId ?? store.scene.devices[0]?.id
+      if (id) sceneController.frameDevice(id)
+    }, 'frame')
+  )
+  markActive('translate')
+  viewport.appendChild(toolbar)
 
   sceneController.mount(viewport)
 
@@ -88,14 +129,6 @@ async function bootstrap(): Promise<void> {
         e.preventDefault()
         store.togglePlay()
         break
-      case 'ArrowRight':
-        e.preventDefault()
-        store.setTime(store.time + (e.shiftKey ? 1 : 1 / store.scene.fps))
-        break
-      case 'ArrowLeft':
-        e.preventDefault()
-        store.setTime(store.time - (e.shiftKey ? 1 : 1 / store.scene.fps))
-        break
       case 'g':
       case 'G':
         sceneController.setGizmoMode('translate')
@@ -104,6 +137,33 @@ async function bootstrap(): Promise<void> {
       case 'R':
         sceneController.setGizmoMode('rotate')
         break
+      case 's':
+      case 'S':
+        sceneController.setGizmoMode('scale')
+        break
+      case 'f':
+      case 'F': {
+        const id = store.selectedDeviceId ?? store.scene.devices[0]?.id
+        if (id) sceneController.frameDevice(id)
+        break
+      }
+      case 'ArrowUp':
+      case 'ArrowDown':
+      case 'ArrowLeft':
+      case 'ArrowRight': {
+        e.preventDefault()
+        if (store.selectedDeviceId && !store.playing) {
+          // nudge selected device in X/Z (shift = 50mm)
+          const step = e.shiftKey ? 50 : 10
+          const dz = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
+          const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
+          sceneController.nudgeSelected(dx, 0, dz)
+        } else {
+          // scrub
+          store.setTime(store.time + (e.shiftKey ? 1 : 1 / store.scene.fps) * (e.key === 'ArrowLeft' ? -1 : 1))
+        }
+        break
+      }
       case 'Escape':
         sceneController.setGizmoMode(null)
         break

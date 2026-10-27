@@ -12,6 +12,10 @@ export interface DeviceRig {
   lidPivot: THREE.Group | null
   screenWmm: number
   screenHmm: number
+  /** GLB lid: rotation (rad) that closes the lid flat onto the deck */
+  lidCloseRad?: number
+  /** GLB lid: authored (fully open) angle that maps to lidAngleDeg = lidOpenDeg */
+  lidOpenDeg?: number
   dispose(): void
 }
 
@@ -270,8 +274,6 @@ export function buildDevice(preset: DevicePreset, finish: Finish, colorHex: stri
     // laptop sits on ground; raise pivot by base thickness handled above
     root.userData.lidOpenRad = THREE.MathUtils.degToRad(105)
     lidPivot.rotation.x = -(root.userData.lidOpenRad as number)
-    // when open, lid stands up: top of lid reaches lidH above base
-    root.position.y = 0
   } else {
     // monitor
     const { w, h, d, cornerRadius } = preset.body
@@ -333,24 +335,38 @@ export function applyTransform(
   )
   rig.root.scale.set(t.scale.x, t.scale.y, t.scale.z)
   if (rig.lidPivot && lidAngleDeg !== undefined) {
-    rig.lidPivot.rotation.x = -THREE.MathUtils.degToRad(Math.min(115, Math.max(0, lidAngleDeg)))
+    const clamped = THREE.MathUtils.clamp(lidAngleDeg, 0, rig.lidOpenDeg ?? 115)
+    if (rig.lidCloseRad !== undefined) {
+      // GLB lid: authored pose = fully open; rotating by lidCloseRad closes it
+      rig.lidPivot.rotation.x = rig.lidCloseRad * (1 - clamped / (rig.lidOpenDeg ?? 115))
+    } else {
+      rig.lidPivot.rotation.x = -THREE.MathUtils.degToRad(clamped)
+    }
   }
+}
+
+export interface GlbBuildOptions {
+  targetSizeMm?: { w: number; h: number; d: number }
+  rotationYDeg?: number
+  enableLid?: boolean
+  screenInset?: number // fraction of display size trimmed from each side (bezel safety)
 }
 
 /**
  * Build a device from a custom .glb/.gltf (SPEC §5 + assets/models/README.md).
  * The model is normalized to `targetSizeMm` (if given), grounded at y=0 and
- * centered on x/z. The screen texture goes to a mesh named `Screen`
- * (case-insensitive), else to a mesh whose material name contains
- * display/screen/oled, else to the largest flat mesh.
+ * centered on x/z. The screen goes onto a dedicated quad mounted just in front
+ * of the detected display mesh (named `Screen` > self-lit emissive > largest
+ * flat), so model layering can never occlude the content. Laptops get a hinge
+ * pivot so the lid can open/close.
  */
-export async function buildCustomDevice(mediaUrl: string, targetSizeMm?: { w: number; h: number; d: number }, rotationYDeg = 0): Promise<DeviceRig | null> {
+export async function buildCustomDevice(mediaUrl: string, opts: GlbBuildOptions = {}): Promise<DeviceRig | null> {
+  const { targetSizeMm, rotationYDeg = 0, enableLid = false, screenInset = 0.015 } = opts
   try {
     const loader = new GLTFLoader()
     const gltf = await loader.loadAsync(mediaUrl)
-    // root of the returned rig must be free for applyTransform (position/
-    // rotation keyframes), so the model + its yaw live on inner groups:
-    //   rigRoot -> yawGroup -> model (scaled + grounded)
+    // rigRoot must stay free for applyTransform (position/rotation keyframes);
+    // model + its yaw live on inner groups: rigRoot -> yawGroup -> model
     const yawGroup = new THREE.Group()
     yawGroup.rotation.y = THREE.MathUtils.degToRad(rotationYDeg)
     const model = gltf.scene
@@ -362,11 +378,9 @@ export async function buildCustomDevice(mediaUrl: string, targetSizeMm?: { w: nu
     let bbox = new THREE.Box3().setFromObject(root)
     let size = bbox.getSize(new THREE.Vector3())
     if (targetSizeMm) {
-      // fit the widest horizontal dimension, preserving aspect
       const scale = targetSizeMm.w / (size.x || 1)
       model.scale.multiplyScalar(scale)
     } else {
-      // legacy heuristic: meters -> mm, giant units -> decimeters
       if (size.y < 5) model.scale.multiplyScalar(1000)
       else if (size.y > 5000) model.scale.multiplyScalar(0.1)
     }
@@ -379,9 +393,7 @@ export async function buildCustomDevice(mediaUrl: string, targetSizeMm?: { w: nu
     model.position.sub(new THREE.Vector3(center.x, bbox.min.y, center.z))
     group.updateMatrixWorld(true)
 
-    // ---- screen mesh pick: name > emissive (self-lit display) > thin flat > largest ----
-    // Note: GLTFLoader does not reliably expose material names, so the pick is
-    // geometry/texture-driven.
+    // ---- display mesh pick: name > emissive (self-lit display) > thin flat > largest ----
     let byName: THREE.Mesh | null = null
     let bestEmissive: THREE.Mesh | null = null
     let bestEmissiveArea = 0
@@ -414,79 +426,202 @@ export async function buildCustomDevice(mediaUrl: string, targetSizeMm?: { w: nu
     const picked = (byName ?? bestEmissive ?? thinFlat ?? largest) as THREE.Mesh | null
     if (!picked) return null
 
-    // Sketchfab-style models stack several meshes over the display (frame,
-    // tinted glass, body plate). Rather than fighting their z-order, hide the
-    // picked display mesh and mount our own quad slightly in front of it.
-    // All quantities below are in `group` space (the rig root), which is what
-    // Box3.setFromObject reports while `group` has no parent transform yet.
+    // ---- screen quad mounted on the picked display's true orientation ----
     group.updateMatrixWorld(true)
     const screenBox = new THREE.Box3().setFromObject(picked)
     const screenCenter = screenBox.getCenter(new THREE.Vector3())
     const screenSize = screenBox.getSize(new THREE.Vector3())
-    const depth = Math.max(screenSize.x, screenSize.y, screenSize.z) * 0.002 + 0.05
-    // display normal = the picked mesh's +z axis expressed in group space
+    // authored orientation of the display, in group space. The display plane's
+    // normal can be ANY of the mesh's local axes depending on authoring, so we
+    // measure extents along all three world-transformed axes and pick:
+    //   normal = thinnest axis, width = widest, height = the remaining one.
     const pickedWorldQuat = picked.getWorldQuaternion(new THREE.Quaternion())
-    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(pickedWorldQuat).normalize()
-    if (Math.abs(normal.z) < Math.abs(normal.x) && Math.abs(normal.z) < Math.abs(normal.y)) {
-      // display faces ±x
-      normal.set(Math.sign(normal.x) || 1, 0, 0)
-    } else if (Math.abs(normal.y) >= Math.abs(normal.x) && Math.abs(normal.y) >= Math.abs(normal.z)) {
-      // display faces ±y
-      normal.set(0, Math.sign(normal.y) || 1, 0)
-    } else {
-      normal.set(0, 0, Math.sign(normal.z) || 1)
+    // TRUE display normal from the mesh GEOMETRY (area-weighted vertex
+    // normals) — model authors often bake the lid tilt into the vertices
+    // while the node transform stays axis-aligned.
+    const geoNormal = new THREE.Vector3()
+    {
+      const geo = picked.geometry
+      const pos = geo.attributes.position
+      if (!pos) throw new Error('display mesh has no positions')
+      const idx = geo.index
+      const a = new THREE.Vector3()
+      const b = new THREE.Vector3()
+      const c = new THREE.Vector3()
+      const tri = new THREE.Vector3()
+      const count = idx ? idx.count : pos.count
+      for (let i = 0; i < count; i += 3) {
+        const i0 = idx ? idx.getX(i) : i
+        const i1 = idx ? idx.getX(i + 1) : i + 1
+        const i2 = idx ? idx.getX(i + 2) : i + 2
+        a.fromBufferAttribute(pos, i0)
+        b.fromBufferAttribute(pos, i1)
+        c.fromBufferAttribute(pos, i2)
+        tri.subVectors(b, a).cross(c.clone().sub(a))
+        geoNormal.add(tri)
+      }
+      if (geoNormal.lengthSq() < 1e-9) geoNormal.set(0, 0, 1)
+      geoNormal.normalize()
     }
-    // the quad must face the camera side (+z); the picked mesh's own facing
-    // may be inverted depending on how the model was authored
-    if (normal.z < 0) normal.multiplyScalar(-1)
+    const normal = geoNormal.applyQuaternion(pickedWorldQuat).normalize()
+    // content faces the camera hemisphere (+z after the preset yaw); flip
+    // backfacing windings (Sketchfab exports often wind display quads backwards)
+    if (normal.z < 0 || (Math.abs(normal.z) < 0.05 && normal.y < 0)) normal.negate()
+    // in-plane basis derived from the true normal — works for tilted lids
+    const helper = Math.abs(normal.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1)
+    const right = new THREE.Vector3().crossVectors(helper, normal).normalize()
+    const up = new THREE.Vector3().crossVectors(normal, right).normalize()
+    // quad dims + center: project the display bbox onto the in-plane axes
+    const corners: THREE.Vector3[] = []
+    for (const cx of [screenBox.min.x, screenBox.max.x]) {
+      for (const cy of [screenBox.min.y, screenBox.max.y]) {
+        for (const cz of [screenBox.min.z, screenBox.max.z]) {
+          corners.push(new THREE.Vector3(cx, cy, cz))
+        }
+      }
+    }
+    let minR = Infinity
+    let maxR = -Infinity
+    let minU = Infinity
+    let maxU = -Infinity
+    for (const c of corners) {
+      const r = c.dot(right)
+      const u = c.dot(up)
+      minR = Math.min(minR, r)
+      maxR = Math.max(maxR, r)
+      minU = Math.min(minU, u)
+      maxU = Math.max(maxU, u)
+    }
+    const inset = THREE.MathUtils.clamp(screenInset, 0, 0.2)
+    const quadW = (maxR - minR) * (1 - inset * 2)
+    const quadH = (maxU - minU) * (1 - inset * 2)
+    const centerR = (minR + maxR) / 2
+    const centerU = (minU + maxU) / 2
+    const quadCenter = screenCenter
+      .clone()
+      .add(right.clone().multiplyScalar(centerR - right.dot(screenCenter)))
+      .add(up.clone().multiplyScalar(centerU - up.dot(screenCenter)))
 
-    picked.visible = false
+    // Find how far the display stack extends along the normal: every mesh
+    // overlapping the display region contributes its front extent. The quad
+    // mounts in front of ALL of them (some models put an opaque plate or
+    // refractive glass slightly ahead of the emissive layer).
+    let stackFront = 0
     root.traverse((o) => {
       if (!(o instanceof THREE.Mesh) || o === picked) return
       const b = new THREE.Box3().setFromObject(o)
       const c = b.getCenter(new THREE.Vector3())
       const sz = b.getSize(new THREE.Vector3())
       const covers =
-        Math.abs(c.x - screenCenter.x) < screenSize.x * 0.15 &&
-        Math.abs(c.y - screenCenter.y) < screenSize.y * 0.15 &&
-        sz.x < screenSize.x * 1.35 &&
-        sz.y < screenSize.y * 1.35
-      if (covers && Math.abs(c.clone().sub(screenCenter).dot(normal)) < Math.max(depth * 4, screenSize.z * 0.6 + 0.5)) {
-        // anything stacked over the display goes away — content comes first
-        o.visible = false
+        Math.abs(c.x - screenCenter.x) < screenSize.x * 0.2 &&
+        Math.abs(c.y - screenCenter.y) < screenSize.y * 0.2 &&
+        sz.x < screenSize.x * 1.45 &&
+        sz.y < screenSize.y * 1.45
+      if (!covers) return
+      let frontMax = -Infinity
+      let backMax = Infinity
+      for (const cx of [b.min.x, b.max.x]) {
+        for (const cy of [b.min.y, b.max.y]) {
+          for (const cz of [b.min.z, b.max.z]) {
+            const d = new THREE.Vector3(cx, cy, cz).sub(screenCenter).dot(normal)
+            frontMax = Math.max(frontMax, d)
+            backMax = Math.min(backMax, d)
+          }
+        }
       }
+      stackFront = Math.max(stackFront, frontMax)
+      // Layers inside the display stack (glass plates, backlight sheets,
+      // protective covers) would sit over the content — hide them. Structural
+      // meshes (thick lid shells, body) stay untouched.
+      const mat = Array.isArray(o.material) ? o.material[0] : o.material
+      const isGlass = mat?.transparent === true || (mat?.transmission ?? 0) > 0.05
+      const flat = Math.min(sz.x, sz.y, sz.z) < 2
+      if (isGlass || flat) o.visible = false
+      void backMax
     })
 
-    // quad dimensions: the two axes perpendicular to the normal
-    const quadW = Math.abs(normal.z) >= Math.abs(normal.x) && Math.abs(normal.z) >= Math.abs(normal.y) ? screenSize.x : screenSize.y
-    const quadH = Math.abs(normal.z) >= Math.abs(normal.x) && Math.abs(normal.z) >= Math.abs(normal.y) ? screenSize.y : screenSize.z
+    // mount in FRONT of the entire display stack
+    const depth = Math.max(0.3, quadW * 0.0012)
     const quadGeo = new THREE.PlaneGeometry(quadW, quadH)
     const screenMat = new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.FrontSide })
     const screenQuad = new THREE.Mesh(quadGeo, screenMat)
-    screenQuad.position.copy(screenCenter).add(normal.clone().multiplyScalar(depth))
+    screenQuad.position.copy(quadCenter).add(normal.clone().multiplyScalar(depth))
     screenQuad.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal)
     group.add(screenQuad)
-    const screenMesh = screenQuad
-    root.traverse((o) => {
-      if (!(o instanceof THREE.Mesh) || o === screenMesh) return
-      const mat = Array.isArray(o.material) ? o.material[0] : o.material
-      if (!mat?.transparent) return
-      const b = new THREE.Box3().setFromObject(o)
-      const c = b.getCenter(new THREE.Vector3())
-      const sz = b.getSize(new THREE.Vector3())
-      const near =
-        Math.abs(c.x - screenCenter.x) < screenSize.x * 0.15 &&
-        Math.abs(c.y - screenCenter.y) < screenSize.y * 0.15 &&
-        Math.abs(c.z - screenCenter.z) < screenSize.z * 0.4 + 2 &&
-        sz.x < screenSize.x * 1.3 &&
-        sz.y < screenSize.y * 1.3
-      if (near) {
-        mat.opacity = Math.min(mat.opacity, 0.05)
-        // transmission passes dominate opacity and would darken the screen
-        ;(mat as THREE.MeshPhysicalMaterial).transmission = 0
-        mat.depthWrite = false
-      }
+
+    // glare layer just above the screen content (driven by screenGlare)
+    const glareMat = new THREE.MeshPhysicalMaterial({
+      color: 0xdfe4ea,
+      metalness: 0,
+      roughness: 0.18,
+      transmission: 0.35,
+      transparent: true,
+      opacity: 0.0,
+      envMapIntensity: 0.5
     })
+    const glareQuad = new THREE.Mesh(new THREE.PlaneGeometry(quadW, quadH), glareMat)
+    glareQuad.position.copy(screenQuad.position).add(normal.clone().multiplyScalar(0.4))
+    glareQuad.quaternion.copy(screenQuad.quaternion)
+    group.add(glareQuad)
+
+    // ---- laptop lid assembly ----
+    // Deterministic: the hinge is the display quad's own bottom edge. Every
+    // mesh anchored on the display side of that hinge rotates with the lid.
+    let lidCloseRad: number | undefined
+    const lidOpenDeg = 115
+    let lidPivot: THREE.Group | null = null
+    if (enableLid) {
+      lidPivot = new THREE.Group()
+      const bottomCenter = screenQuad.position.clone().sub(up.clone().multiplyScalar(quadH / 2))
+      lidPivot.position.set(0, bottomCenter.y, bottomCenter.z)
+      yawGroup.add(lidPivot)
+      group.updateMatrixWorld(true)
+
+      const dir = screenQuad.position.clone().sub(lidPivot.position)
+      const lidReach = dir.length()
+      dir.normalize()
+      const lidMeshes: THREE.Mesh[] = []
+      const pivot = lidPivot
+      root.traverse((o) => {
+        if (!(o instanceof THREE.Mesh) || !o.visible || o === screenQuad || o === glareQuad) return
+        const c = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3())
+        const rel = c.clone().sub(pivot.position)
+        if (rel.dot(dir) > 8 && rel.length() < lidReach * 2.2) lidMeshes.push(o)
+      })
+      for (const mesh of lidMeshes) {
+        yawGroup.attach(mesh) // preserve world transform
+        lidPivot.attach(mesh)
+      }
+      lidPivot.attach(screenQuad)
+      lidPivot.attach(glareQuad)
+      group.updateMatrixWorld(true)
+
+      // rotation that lays the lid flat onto the deck (+z), applied inversely
+      // so lidAngleDeg = lidOpenDeg renders the authored pose
+      const d = screenQuad.position.clone().sub(lidPivot.position)
+      lidCloseRad = Math.atan2(d.y, d.z)
+      if (lidCloseRad < 0) lidCloseRad += Math.PI * 2
+
+      // bezel plates often sit in FRONT of the display glass with a window
+      // cutout — mount the quad (and glare) ahead of the deepest lid mesh so
+      // content is never masked
+      let frontMax = -Infinity
+      for (const mesh of [...lidMeshes, screenQuad, glareQuad]) {
+        const b = new THREE.Box3().setFromObject(mesh)
+        for (const cx of [b.min.x, b.max.x]) {
+          for (const cy of [b.min.y, b.max.y]) {
+            for (const cz of [b.min.z, b.max.z]) {
+              frontMax = Math.max(frontMax, new THREE.Vector3(cx, cy, cz).sub(quadCenter).dot(normal))
+            }
+          }
+        }
+      }
+      const lift = frontMax + 0.4 - depth
+      if (lift > 0) {
+        screenQuad.position.addScaledVector(normal, lift)
+        glareQuad.position.addScaledVector(normal, lift + 0.3)
+      }
+    }
 
     const dispose = (): void => {
       group.traverse((o) => {
@@ -494,15 +629,15 @@ export async function buildCustomDevice(mediaUrl: string, targetSizeMm?: { w: nu
       })
       screenMat.dispose()
     }
-    const bboxFinal = new THREE.Box3().setFromObject(group)
-    const sizeFinal = bboxFinal.getSize(new THREE.Vector3())
     return {
       root: group,
-      screenMesh: screenMesh as THREE.Mesh,
-      glareMesh: null,
-      lidPivot: null,
-      screenWmm: sizeFinal.x,
-      screenHmm: sizeFinal.y,
+      screenMesh: screenQuad,
+      glareMesh: glareQuad,
+      lidPivot,
+      screenWmm: quadW,
+      screenHmm: quadH,
+      lidCloseRad,
+      lidOpenDeg,
       dispose
     }
   } catch (err) {

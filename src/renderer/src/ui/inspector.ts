@@ -93,6 +93,36 @@ export function mountInspector(root: HTMLElement): void {
     }
     root.appendChild(row(t('inspector.cutout'), cutoutSelect))
 
+    // lid angle (laptops: procedural + GLB)
+    if (preset.kind === 'laptop') {
+      const current = dev.lidAngleDeg?.keys[0]?.value ?? 105
+      const lidVal = el('span', { style: 'min-width:38px;color:var(--text-dim)' }, String(Math.round(current)))
+      const lidRow = el('div', { style: 'display:flex;align-items:center;gap:8px;flex:1' })
+      lidRow.append(
+        el('input', {
+          type: 'range',
+          min: '0',
+          max: '115',
+          step: '1',
+          value: String(current),
+          oninput: (e: Event) => {
+            const v = Number((e.target as HTMLInputElement).value)
+            lidVal.textContent = String(v)
+            store.setLidAngle(dev.id, v)
+          }
+        }),
+        lidVal
+      )
+      root.appendChild(row('Lid', lidRow))
+      const openBtns = el('div', { class: 'row', style: 'gap:6px' })
+      openBtns.append(
+        el('button', { onclick: () => store.setLidAngle(dev.id, 0) }, 'Close'),
+        el('button', { onclick: () => store.setLidAngle(dev.id, 45) }, '45°'),
+        el('button', { onclick: () => store.setLidAngle(dev.id, 105) }, 'Open')
+      )
+      root.appendChild(openBtns)
+    }
+
     // screen source
     root.appendChild(el('div', { class: 'section-title' }, t('inspector.screen')))
     const kindSelect = el('select', {
@@ -135,6 +165,45 @@ export function mountInspector(root: HTMLElement): void {
       if (dev.screen.kind === 'video') {
         const media2 = store.mediaById(dev.screen.mediaId)
         const maxDur = media2?.durationSec ?? 10
+        // playback controls
+        const videoCtrl = el('div', { class: 'row', style: 'flex-wrap:wrap;gap:6px' })
+        videoCtrl.append(
+          el('button', {
+            onclick: () => {
+              store.edit('Video loop', (p) => {
+                for (const s of p.scenes) {
+                  const d = s.devices.find((x) => x.id === dev.id)
+                  if (d && d.screen.kind === 'video') d.screen.loop = !d.screen.loop
+                }
+              })
+            }
+          }, dev.screen.loop ? '🔁 Loop on' : '🔁 Loop off'),
+          el('select', {
+            onchange: (e: Event) => {
+              const rate = Number((e.target as HTMLSelectElement).value)
+              store.edit('Video rate', (p) => {
+                for (const s of p.scenes) {
+                  const d = s.devices.find((x) => x.id === dev.id)
+                  if (d && d.screen.kind === 'video') d.screen.rate = rate
+                }
+              })
+            }
+          }, ...[0.5, 1, 1.5, 2].map((r) => el('option', { value: String(r), selected: dev.screen.kind === 'video' && dev.screen.rate === r }, `${r}×`))),
+          el('button', {
+            onclick: () => {
+              store.edit('Full trim', (p) => {
+                for (const s of p.scenes) {
+                  const d = s.devices.find((x) => x.id === dev.id)
+                  if (d && d.screen.kind === 'video') {
+                    d.screen.trimIn = 0
+                    d.screen.trimOut = media2?.durationSec ?? 10
+                  }
+                }
+              })
+            }
+          }, 'Full length')
+        )
+        root.appendChild(videoCtrl)
         root.appendChild(
           row(
             'Trim in',
