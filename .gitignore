@@ -16,3 +16,6 @@ assets/models/*.gltf
 
 # e2e scratch
 demo/.tmp-*
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
