@@ -8,6 +8,8 @@ import { store } from '../state/store'
 import { el } from './dom'
 import { toast } from './toast'
 import { applyMode } from '../engine/modes'
+import { assignMedia } from './leftPanel'
+import { loadShowcase } from './showcase'
 
 const FLAG = 'livemock.firstRunDone'
 
@@ -69,6 +71,10 @@ export function maybeShowFirstRun(): void {
   const sampleRow = el('div', { class: 'row', style: 'margin-top:14px;justify-content:space-between' })
   sampleRow.append(
     el('span', { style: 'color:var(--text-dim)' }, 'Or explore a ready-made demo:'),
+    el('button', { class: 'accent', onclick: () => {
+      finish()
+      void loadShowcase()
+    } }, '✨ Mac + iPhone showcase'),
     el('button', { onclick: () => {
       loadSampleProject()
       finish()
@@ -101,14 +107,7 @@ export function maybeShowFirstRun(): void {
       const media = entries.find((m) => m.kind === 'image' || m.kind === 'video')
       if (!media) return
       store.addMedia([media])
-      if (media.kind === 'image') {
-        store.setDeviceScreen(device.id, { kind: 'image', mediaId: media.id, fit: 'fit' })
-      } else {
-        store.setDeviceScreen(device.id, {
-          kind: 'video', mediaId: media.id, fit: 'fit', trimIn: 0,
-          trimOut: media.durationSec ?? 5, rate: 1, loop: true, offsetSec: 0
-        })
-      }
+      assignMedia(device.id, media)
       toast('Media attached')
     })()
   })

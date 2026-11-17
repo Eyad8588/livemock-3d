@@ -127,7 +127,8 @@ export const GLB_DEVICE_PRESETS: DevicePreset[] = [
     mobileEmulation: true,
     modelFile: 'phone_17_pro_max.glb',
     modelRotationYDeg: 180,
-    targetSizeMm: { w: 77.6, h: 163.0, d: 8.25 }
+    targetSizeMm: { w: 77.6, h: 163.0, d: 8.25 },
+    screenCornerRadiusMm: 9.2
   },
   {
     id: 'glb-macbook-16',
@@ -141,7 +142,8 @@ export const GLB_DEVICE_PRESETS: DevicePreset[] = [
     defaultColor: '#2e2f33',
     mobileEmulation: false,
     modelFile: 'macbook_pro_m3_16_inch_2024.glb',
-    targetSizeMm: { w: 355.4, h: 248.1, d: 16.8 }
+    targetSizeMm: { w: 355.4, h: 248.1, d: 16.8 },
+    screenCornerRadiusMm: 2.5
   }
 ]
 

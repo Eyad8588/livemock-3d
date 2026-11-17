@@ -13,3 +13,6 @@ smoke-*.png
 # user-provided device models (trademarked content stays local)
 assets/models/*.glb
 assets/models/*.gltf
+
+# e2e scratch
+demo/.tmp-*

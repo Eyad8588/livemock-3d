@@ -83,6 +83,9 @@ class VideoProvider implements ScreenProvider {
     this.source = source
     this.mediaUrl = mediaUrl
     const v = document.createElement('video')
+    // CORS-clean frames: without this WebGL refuses to upload the video
+    // (livemock-media:// responds with Access-Control-Allow-Origin: *)
+    v.crossOrigin = 'anonymous'
     v.src = mediaUrl
     v.muted = true
     v.loop = source.loop
@@ -96,6 +99,19 @@ class VideoProvider implements ScreenProvider {
     })
     this.texture = new THREE.VideoTexture(v)
     this.texture.colorSpace = THREE.SRGBColorSpace
+    this.texture.generateMipmaps = false
+    this.texture.minFilter = THREE.LinearFilter
+  }
+
+  /** Map scene time to media time honoring offset / rate / trim / loop. */
+  mediaTimeAt(timeSec: number): number | null {
+    const s = this.source
+    const local = timeSec - s.offsetSec
+    if (local < 0) return null
+    const span = Math.max(0.05, s.trimOut - s.trimIn)
+    const raw = local * s.rate
+    if (s.loop) return s.trimIn + (raw % span)
+    return Math.min(s.trimIn + raw, s.trimOut)
   }
 
   /** Switch to a decoded-frame canvas texture for deterministic export. */
@@ -116,13 +132,7 @@ class VideoProvider implements ScreenProvider {
   /** Decode + draw the exact frame for scene time `timeSec` (scene → media mapping). */
   async seekExport(timeSec: number): Promise<void> {
     if (!this.exportDecoder || !this.exportCanvas || !this.exportTexture) return
-    const s = this.source
-    const local = timeSec - s.offsetSec
-    if (local < 0) return
-    let mediaTime = s.trimIn + local * s.rate
-    const span = Math.max(0.1, s.trimOut - s.trimIn)
-    if (s.loop) mediaTime = s.trimIn + ((mediaTime - s.trimIn) % span)
-    else if (mediaTime > s.trimOut) mediaTime = s.trimOut
+    const mediaTime = this.mediaTimeAt(timeSec) ?? this.source.trimIn
     const ctx = this.exportCanvas.getContext('2d') as CanvasRenderingContext2D | null
     if (!ctx) return
     ctx.fillStyle = '#000'
@@ -140,21 +150,25 @@ class VideoProvider implements ScreenProvider {
     // restore live preview texture
     this.texture = new THREE.VideoTexture(this.video)
     this.texture.colorSpace = THREE.SRGBColorSpace
+    this.texture.generateMipmaps = false
+    this.texture.minFilter = THREE.LinearFilter
+    if (this.video.videoWidth && this.video.videoHeight) this.contentAspect = this.video.videoWidth / this.video.videoHeight
   }
 
   update(timeSec: number, playing: boolean): void {
     const s = this.source
-    const inRange = timeSec >= s.offsetSec
-    if (playing && inRange) {
+    const mt = this.mediaTimeAt(timeSec)
+    const active = playing && mt !== null && (s.loop || mt < s.trimOut - 0.02)
+    if (active) {
       if (this.video.paused) void this.video.play().catch(() => undefined)
-    } else if (!this.video.paused) {
-      this.video.pause()
-    }
-    if (!playing && inRange) {
-      // scrub: approximate frame position via seek (export uses Mediabunny)
-      const local = ((timeSec - s.offsetSec) * s.rate) % Math.max(0.1, s.trimOut - s.trimIn)
-      const target = s.trimIn + local
-      if (Math.abs(this.video.currentTime - target) > 0.08) this.video.currentTime = target
+      // honor trim range while playing (native loop covers the whole file)
+      const ct = this.video.currentTime
+      if (ct > s.trimOut + 0.05 || ct < s.trimIn - 0.05) this.video.currentTime = s.trimIn
+    } else {
+      if (!this.video.paused) this.video.pause()
+      // scrub / hold: approximate frame via seek (export decodes exact frames)
+      const target = mt ?? s.trimIn
+      if (Math.abs(this.video.currentTime - target) > 0.08 && !this.video.seeking) this.video.currentTime = target
     }
   }
 

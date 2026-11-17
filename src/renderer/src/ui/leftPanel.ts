@@ -68,9 +68,23 @@ export function mountLeftPanel(root: HTMLElement): void {
             }
           },
           el('span', { class: 'name' }, preset?.label ?? d.presetId),
+          screenBtn(d.id),
           badge
         )
       )
+      const row = root.lastElementChild as HTMLElement
+      row.title = 'Drop an image or video here to put it on this screen'
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault()
+        row.classList.add('drop-target')
+      })
+      row.addEventListener('dragleave', () => row.classList.remove('drop-target'))
+      row.addEventListener('drop', (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        row.classList.remove('drop-target')
+        void dropOntoDevice(d.id, e.dataTransfer)
+      })
     }
 
     // add device
@@ -184,6 +198,20 @@ export function mountLeftPanel(root: HTMLElement): void {
   render()
 }
 
+function screenBtn(deviceId: string): HTMLElement {
+  const b = el('button', {
+    class: 'ghost',
+    style: 'padding:2px 6px;margin-inline-start:auto;font-size:12px',
+    onclick: (e: Event) => {
+      e.stopPropagation()
+      void pickMediaForDevice(deviceId)
+    }
+  }, '🎬')
+  b.title = 'Put a video or image on this screen…'
+  b.dataset['testid'] = 'set-screen'
+  return b
+}
+
 function mediaItem(m: MediaEntry): HTMLElement {
   const item = el(
     'div',
@@ -197,22 +225,31 @@ function mediaItem(m: MediaEntry): HTMLElement {
     el('span', { class: 'name' }, m.name),
     el('span', { class: 'badge' }, m.kind)
   )
+  if (m.kind === 'image' || m.kind === 'video') {
+    item.title = 'Drag onto a device (or double-click to use on the selected device)'
+  }
   item.addEventListener('dblclick', () => {
-    const dev = store.selectedDevice()
-    if (!dev) return
+    const dev = store.selectedDevice() ?? store.scene.devices[0]
+    if (!dev) {
+      toast('Add a device first')
+      return
+    }
     assignMedia(dev.id, m)
+    toast(`${m.name} → screen`)
   })
   return item
 }
 
 export function assignMedia(deviceId: string, m: MediaEntry): void {
+  // 'crop' = cover: fills the whole screen (no letterbox bars); switch to
+  // Fit in the inspector to see the full frame instead
   if (m.kind === 'image') {
-    store.setDeviceScreen(deviceId, { kind: 'image', mediaId: m.id, fit: 'fit' })
+    store.setDeviceScreen(deviceId, { kind: 'image', mediaId: m.id, fit: 'crop' })
   } else if (m.kind === 'video') {
     store.setDeviceScreen(deviceId, {
       kind: 'video',
       mediaId: m.id,
-      fit: 'fit',
+      fit: 'crop',
       trimIn: 0,
       trimOut: m.durationSec ?? 5,
       rate: 1,
@@ -220,6 +257,40 @@ export function assignMedia(deviceId: string, m: MediaEntry): void {
       offsetSec: 0
     })
   }
+}
+
+/** Open the file picker and put the first image/video on the device's screen. */
+export async function pickMediaForDevice(deviceId: string): Promise<void> {
+  const entries = await window.livemock.importMediaDialog(store.project.id)
+  const media = entries.find((m) => m.kind === 'image' || m.kind === 'video')
+  if (!media) return
+  store.addMedia(entries)
+  assignMedia(deviceId, media)
+  toast(`${media.name} → screen`)
+}
+
+/** Import dropped OS files (or a dragged media item) onto a device. */
+export async function dropOntoDevice(deviceId: string, dt: DataTransfer | null): Promise<boolean> {
+  if (!dt) return false
+  const mediaId = dt.getData('application/x-livemock-media')
+  if (mediaId) {
+    const m = store.project.media.find((x) => x.id === mediaId)
+    if (m) assignMedia(deviceId, m)
+    return !!m
+  }
+  const files = [...(dt.files ?? [])]
+  if (files.length === 0) return false
+  const paths = files.map((f) => window.livemock.pathForFile(f)).filter(Boolean)
+  const entries = await window.livemock.importMediaFromPaths(paths, store.project.id)
+  store.addMedia(entries)
+  const media = entries.find((m) => m.kind === 'image' || m.kind === 'video')
+  if (!media) {
+    toast('Drop an image or video file')
+    return false
+  }
+  assignMedia(deviceId, media)
+  toast(`${media.name} → screen`)
+  return true
 }
 
 export function initLeftPanel(): void {

@@ -6,6 +6,7 @@ import { t, onLangChange } from '../i18n/i18n'
 import { el, clear } from './dom'
 import { toast } from './toast'
 import { LiveProvider } from '../engine/screenSource'
+import { pickMediaForDevice } from './leftPanel'
 
 export function mountInspector(root: HTMLElement): void {
   const render = (): void => {
@@ -317,42 +318,16 @@ function switchSource(dev: DeviceInstance, kind: 'none' | 'url' | 'image' | 'vid
       }
       break
     case 'image':
-      source = { kind: 'image', mediaId: '', fit: 'fit' }
-      break
     case 'video':
-      source = { kind: 'video', mediaId: '', fit: 'fit', trimIn: 0, trimOut: 5, rate: 1, loop: true, offsetSec: 0 }
-      break
+      // pick first; an empty media source would just render a broken screen
+      void pickMedia(dev)
+      return
   }
   store.setDeviceScreen(dev.id, source)
-  if (kind === 'image' || kind === 'video') void pickMedia(dev)
 }
 
 async function pickMedia(dev: DeviceInstance): Promise<void> {
-  const entries = await window.livemock.importMediaDialog(store.project.id)
-  const media = entries.find((m) => m.kind === 'image' || m.kind === 'video')
-  if (!media) {
-    if (entries.length === 0) {
-      // keep kind but empty
-      return
-    }
-    toast('Pick an image or video file')
-    return
-  }
-  store.addMedia([media])
-  if (media.kind === 'image') {
-    store.setDeviceScreen(dev.id, { kind: 'image', mediaId: media.id, fit: 'fit' })
-  } else {
-    store.setDeviceScreen(dev.id, {
-      kind: 'video',
-      mediaId: media.id,
-      fit: 'fit',
-      trimIn: 0,
-      trimOut: media.durationSec ?? 5,
-      rate: 1,
-      loop: true,
-      offsetSec: 0
-    })
-  }
+  await pickMediaForDevice(dev.id)
 }
 
 // ---------- live URL controls + interaction panel + record take ----------

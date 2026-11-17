@@ -8,6 +8,7 @@ import { t } from '../i18n/i18n'
 import { el } from './dom'
 import { toast } from './toast'
 import { startExport, type ExportHandle, type ExportProgressInfo } from '../export/exporter'
+import { sceneController } from '../engine/view'
 
 export function openExportDialog(): void {
   const dlg = document.createElement('dialog')
@@ -31,7 +32,13 @@ export function openExportDialog(): void {
       alphaToggle.checked = false
       alphaToggle.disabled = !fmt?.supportsAlpha
       alphaRow.style.opacity = fmt?.supportsAlpha ? '1' : '0.4'
-      fmtInfo.textContent = fmt?.via === 'webcodecs' ? 'Encoded with hardware WebCodecs + Mediabunny (ffmpeg fallback).' : 'Encoded with bundled ffmpeg.'
+      fmtInfo.textContent =
+        format === 'png-still'
+          ? `Single PNG of the frame at the playhead (${store.time.toFixed(2)}s), animated camera. Tip: 📷 Frame in the top bar exports exactly what the viewport shows.`
+          : fmt?.via === 'webcodecs'
+            ? 'Encoded with hardware WebCodecs + Mediabunny (ffmpeg fallback).'
+            : 'Encoded with bundled ffmpeg.'
+      exportBtn.textContent = format === 'png-still' ? 'Export PNG' : `Export (${scene.durationSec}s)`
     }
   }) as HTMLSelectElement
   for (const f of EXPORT_FORMATS) formatSelect.append(el('option', { value: f.id }, f.label))
@@ -39,7 +46,9 @@ export function openExportDialog(): void {
 
   // aspect presets (batch: multiple)
   const aspectBox = el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin:4px 10px 8px' })
-  const selectedAspects = new Set<string>(['9:16'])
+  // default to the shape the user is composing in
+  const va = sceneController.viewportAspect()
+  const selectedAspects = new Set<string>([va > 1.2 ? '16:9' : va < 0.85 ? '9:16' : '1:1'])
   for (const a of ASPECT_PRESETS) {
     const chip = el('button', {
       class: selectedAspects.has(a.id) ? 'accent' : '',

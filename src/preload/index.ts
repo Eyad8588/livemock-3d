@@ -37,6 +37,9 @@ const api: LiveMockPreloadApi = {
   importMediaDialog: (projectId: string): Promise<MediaEntry[]> => ipcRenderer.invoke(IPC.MediaImportDialog, { projectId }),
   importMediaFromPaths: (paths: string[], projectId: string): Promise<MediaEntry[]> =>
     ipcRenderer.invoke('media:import-path', { paths, projectId }),
+  importSampleMedia: (names: import('../shared/ipc').SampleMediaName[], projectId: string): Promise<MediaEntry[]> =>
+    ipcRenderer.invoke(IPC.MediaImportSample, { names, projectId }),
+  modelsAvailable: (): Promise<string[]> => ipcRenderer.invoke(IPC.ModelsAvailable),
   pathForFile: (file: File): string => webUtils.getPathForFile(file),
   mediaMediaUrl: (mediaId: string): string => `livemock-media://media/${mediaId}`,
   takeMediaUrl: (takeId: string): string => `livemock-media://take/${takeId}`,

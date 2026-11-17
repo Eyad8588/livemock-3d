@@ -68,6 +68,8 @@ export interface DevicePreset {
   modelRotationYDeg?: number
   /** real-world size in mm used to normalize imported model scale + framing */
   targetSizeMm?: { w: number; h: number; d: number }
+  /** GLB: corner radius (mm) of the visible display, for the rounded screen quad */
+  screenCornerRadiusMm?: number
 }
 
 export interface WalkthroughStepWait {

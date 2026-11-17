@@ -4,6 +4,8 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } fr
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { Readable } from 'node:stream'
+import { parseByteRange } from '../shared/exportUtils'
 import {
   IPC,
   assertString,
@@ -16,7 +18,9 @@ import {
   type OpenProjectResult,
   type SaveProjectResult,
   type TakeRecordRequest,
-  type VerifyResult
+  type VerifyResult,
+  SAMPLE_MEDIA,
+  type SampleMediaName
 } from '../shared/ipc'
 import { createDefaultProject } from '../shared/serialize'
 import {
@@ -24,6 +28,7 @@ import {
   ensureWorkspace,
   findStoredFile,
   importMediaFromPaths,
+  mimeFor,
   listRecoveries,
   openProjectZip,
   saveProjectZip,
@@ -58,6 +63,30 @@ function assetsRoot(): string {
   return process.env['ELECTRON_RENDERER_URL'] ? process.cwd() : path.resolve(__dirname, '../..')
 }
 
+/**
+ * Serve a stored file with HTTP Range support. <video> needs 206 partial
+ * responses to seek/loop reliably; CORS header lets WebGL sample the frames
+ * (the element uses crossOrigin="anonymous").
+ */
+function serveFileWithRanges(file: string, rangeHeader: string | null): Response {
+  const size = fs.statSync(file).size
+  const ext = path.extname(file).slice(1)
+  const headers = new Headers({
+    'Access-Control-Allow-Origin': '*',
+    'Accept-Ranges': 'bytes',
+    'Content-Type': mimeFor('image', ext)
+  })
+  const range = parseByteRange(rangeHeader, size)
+  const toWeb = (s: fs.ReadStream): ReadableStream => Readable.toWeb(s) as unknown as ReadableStream
+  if (range) {
+    headers.set('Content-Range', `bytes ${range.start}-${range.end}/${size}`)
+    headers.set('Content-Length', String(range.end - range.start + 1))
+    return new Response(toWeb(fs.createReadStream(file, { start: range.start, end: range.end })), { status: 206, headers })
+  }
+  headers.set('Content-Length', String(size))
+  return new Response(toWeb(fs.createReadStream(file)), { status: 200, headers })
+}
+
 function registerMediaProtocolHandlers(ses: typeof protocol): void {
   ses.handle('livemock-media', async (request) => {
     const url = new URL(request.url)
@@ -65,11 +94,7 @@ function registerMediaProtocolHandlers(ses: typeof protocol): void {
     const id = decodeURIComponent(url.pathname.replace(/^\//, '')).replace(/\.[a-z0-9]+$/i, '')
     const file = findStoredFile(kind as 'media' | 'take', id)
     if (!file) return new Response('Not found', { status: 404 })
-    const res = await net.fetch(pathToFileURL(file).toString())
-    const headers = new Headers(res.headers)
-    headers.set('Access-Control-Allow-Origin', '*')
-    headers.set('Content-Type', res.headers.get('Content-Type') ?? 'application/octet-stream')
-    return new Response(res.body, { status: res.status, headers })
+    return serveFileWithRanges(file, request.headers.get('Range'))
   })
 
   ses.handle('livemock-test', (request) => {
@@ -284,6 +309,28 @@ function registerIpc(): void {
     return importMediaFromPaths(payload.paths as string[])
   })
 
+  handle(IPC.MediaImportSample, async (payload) => {
+    if (!isRecord(payload) || !Array.isArray(payload.names)) throw new Error('bad payload')
+    const names = (payload.names as unknown[]).filter((n): n is SampleMediaName => typeof n === 'string' && (SAMPLE_MEDIA as readonly string[]).includes(n))
+    const projectId = typeof payload.projectId === 'string' ? payload.projectId : '__default__'
+    const dir = path.join(assetsRoot(), 'assets', 'sample-media')
+    const files = names.map((n) => path.join(dir, n)).filter((f) => fs.existsSync(f))
+    ensureWorkspace(projectId)
+    // keep the requested order (importMediaFromPaths may reorder/dedupe)
+    const out: import('../shared/types').MediaEntry[] = []
+    for (const f of files) out.push(...(await importMediaFromPaths([f])))
+    return out
+  })
+
+  handle<string[]>(IPC.ModelsAvailable, () => {
+    const dir = path.join(assetsRoot(), 'assets', 'models')
+    try {
+      return fs.readdirSync(dir).filter((f) => /\.(glb|gltf)$/i.test(f))
+    } catch {
+      return []
+    }
+  })
+
   handle(IPC.MediaImportDialog, async (payload) => {
     const win = mainWindow
     if (!win) return []
@@ -381,7 +428,8 @@ function registerIpc(): void {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
-    const verification = await verifyWithFfprobe(target, { width: req.width, height: req.height, fps: req.fps })
+    const isStill = /^(png|jpe?g|webp)$/i.test(req.ext)
+    const verification = await verifyWithFfprobe(target, { width: req.width, height: req.height, fps: isStill ? undefined : req.fps })
     return { ok: true, path: target, verification: verification.humanReport }
   })
   ipcMain.on(IPC.ExportFfmpegCancel, (_e, jobId: unknown) => {

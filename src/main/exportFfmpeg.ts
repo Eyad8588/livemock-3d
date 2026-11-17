@@ -101,7 +101,7 @@ export function registerExportIpc(): void {
     }
 
     const args = buildFfmpegArgs(settings.format, {
-      frameFormat: settings.format === 'png-seq' || settings.format === 'png-still' ? 'png' : 'rgba',
+      frameFormat: 'rgba',
       width: settings.width,
       height: settings.height,
       fps: settings.fps,

@@ -44,7 +44,7 @@ export function createEnvironment(_renderer: THREE.WebGLRenderer): EnvRig {
     const key = new THREE.DirectionalLight(0xffffff, 2.6)
     key.position.set(-350, 600, 500)
     key.castShadow = true
-    key.shadow.mapSize.set(1024, 1024)
+    key.shadow.mapSize.set(2048, 2048)
     key.shadow.camera.near = 50
     key.shadow.camera.far = 3000
     const c = key.shadow.camera
@@ -145,9 +145,11 @@ export function createEnvironment(_renderer: THREE.WebGLRenderer): EnvRig {
         cv.height = 256
         const ctx = cv.getContext('2d')!
         const grad = ctx.createLinearGradient(0, 0, 0, 256)
-        grad.addColorStop(0, 'rgba(255,240,210,0.35)')
+        grad.addColorStop(0, 'rgba(255,240,210,0.22)')
         grad.addColorStop(1, 'rgba(255,240,210,0)')
         ctx.fillStyle = grad
+        // soft-edged beam (a hard polygon reads as a flat card in renders)
+        ctx.filter = 'blur(22px)'
         ctx.beginPath()
         ctx.moveTo(100, 0)
         ctx.lineTo(160, 0)
@@ -163,6 +165,8 @@ export function createEnvironment(_renderer: THREE.WebGLRenderer): EnvRig {
         shaft.position.set(-150, 500, -150)
         shaft.rotation.z = 0.22
         group.add(shaft)
+        // dark satin floor so devices are grounded (catches the key light)
+        addFloor('#14161b', 0.42, 0.35)
         break
       }
       case 'brand-color': {

@@ -80,7 +80,7 @@ function detectKind(ext: string): MediaEntry['kind'] {
   return 'image'
 }
 
-function mimeFor(_kind: MediaEntry['kind'], ext: string): string {
+export function mimeFor(_kind: MediaEntry['kind'], ext: string): string {
   const e = ext.toLowerCase()
   const table: Record<string, string> = {
     png: 'image/png',

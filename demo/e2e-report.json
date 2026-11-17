@@ -1,0 +1,112 @@
+{
+  "showcase scene built with 2 GLB devices + sample videos": {
+    "ok": true,
+    "detail": {
+      "name": "Mac + iPhone",
+      "devices": [
+        {
+          "preset": "glb-macbook-16",
+          "screen": "video"
+        },
+        {
+          "preset": "glb-iphone-17-pro-max",
+          "screen": "video"
+        }
+      ],
+      "media": [
+        "sample-laptop.mp4",
+        "sample-phone.mp4"
+      ]
+    }
+  },
+  "user videos assigned to both screens": {
+    "ok": true,
+    "detail": [
+      {
+        "kind": "video",
+        "mediaId": "073bb3fbe786e2a05d13fab2df17774a8812f142",
+        "fit": "crop",
+        "loop": true
+      },
+      {
+        "kind": "video",
+        "mediaId": "6177bd3907666e6a9162a17e4e6b93b7d41bff9e",
+        "fit": "crop",
+        "loop": true
+      }
+    ]
+  },
+  "user videos play in preview": {
+    "ok": true,
+    "detail": [
+      {
+        "t": 1.3135,
+        "paused": false,
+        "w": 1280
+      },
+      {
+        "t": 1.3151,
+        "paused": false,
+        "w": 720
+      }
+    ]
+  },
+  "PNG frame (opaque)": {
+    "ok": true,
+    "detail": {
+      "file": "Untitled Project_Mac + iPhone_frame_3_00s_1920x1080_30_10.png",
+      "pix": "rgba",
+      "size": "1920x1080"
+    }
+  },
+  "PNG frame (transparent)": {
+    "ok": true,
+    "detail": {
+      "file": "Untitled Project_Mac + iPhone_frame_3_00s_2048x2048_30_3.png",
+      "pix": "rgba",
+      "size": "2048x2048"
+    }
+  },
+  "PNG frame (view)": {
+    "ok": true,
+    "detail": {
+      "file": "Untitled Project_Mac + iPhone_frame_3_00s_2560x1574_30.png",
+      "pix": "rgba",
+      "size": "2560x1574"
+    }
+  },
+  "transparent PNG: background alpha 0, devices opaque": {
+    "ok": true,
+    "detail": {
+      "cornerAlpha": 0,
+      "centreAlpha": 255
+    }
+  },
+  "MP4 export verified": {
+    "ok": true,
+    "detail": "Export verified: 1920×1080, 30.00 fps, 6.00s."
+  },
+  "MP4 frames differ over time (animation + playing screens)": {
+    "ok": true,
+    "detail": {
+      "f1": "1920x1080",
+      "psnrLog": ""
+    }
+  },
+  "gif export decodes": {
+    "ok": true,
+    "detail": "Video: gif, bgra, 640x360, 23.92 fps, 23.98 tbr, 100 tbn"
+  },
+  "webm export decodes": {
+    "ok": true,
+    "detail": "Video: vp9 (Profile 0), yuv420p(tv, progressive), 640x360, SAR 1:1 DAR 16:9, 30 fps, 30 tbr, 1k tbn"
+  },
+  "mov export decodes": {
+    "ok": true,
+    "detail": "Video: prores (4444) (ap4h / 0x68347061), yuva444p12le(progressive), 640x360, 26478 kb/s, 30 fps, 30 tbr, 15360 tbn (def"
+  },
+  "no renderer errors": {
+    "ok": true,
+    "detail": []
+  }
+}

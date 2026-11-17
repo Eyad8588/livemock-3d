@@ -105,6 +105,57 @@ export class PostFxStack {
     this.composer?.render(dt)
   }
 
+  // ---- export: offscreen composer writing into an 8-bit RGBA target ----
+  private exportComposer: EffectComposer | null = null
+  private exportPasses: { render: RenderPass; bloom: UnrealBloomPass; vignette: ShaderPass; grain: ShaderPass } | null = null
+  private exportSize = ''
+
+  /**
+   * Render the scene through the FX chain at export resolution and return
+   * bottom-up RGBA pixels. Never touches the viewport composer or the canvas.
+   */
+  renderExportPixels(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, settings: PostFxSettings, timeSec: number, w: number, h: number): Uint8Array {
+    const key = `${w}x${h}`
+    if (!this.exportComposer || this.exportSize !== key) {
+      this.exportComposer?.dispose()
+      const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.UnsignedByteType, samples: 4 })
+      const composer = new EffectComposer(renderer, rt)
+      composer.renderToScreen = false
+      const render = new RenderPass(scene, camera)
+      render.clearAlpha = 0
+      const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.25, 0.4, 1.05)
+      const vignette = new ShaderPass(VignetteShader)
+      const grain = new ShaderPass(GrainShader)
+      composer.addPass(render)
+      composer.addPass(bloom)
+      composer.addPass(vignette)
+      composer.addPass(grain)
+      composer.addPass(new OutputPass())
+      this.exportComposer = composer
+      this.exportPasses = { render, bloom, vignette, grain }
+      this.exportSize = key
+    }
+    const ps = this.exportPasses!
+    ps.render.camera = camera
+    ps.bloom.enabled = settings.bloom
+    ps.bloom.strength = settings.bloomStrength
+    ps.vignette.enabled = settings.vignette
+    ps.grain.enabled = settings.filmGrain
+    ;(ps.grain.uniforms as Record<string, { value: number }>)['time']!.value = timeSec % 10
+    this.exportComposer!.render(1 / 60)
+    const buf = new Uint8Array(w * h * 4)
+    renderer.readRenderTargetPixels(this.exportComposer!.readBuffer, 0, 0, w, h, buf)
+    renderer.setRenderTarget(null)
+    return buf
+  }
+
+  disposeExport(): void {
+    this.exportComposer?.dispose()
+    this.exportComposer = null
+    this.exportPasses = null
+    this.exportSize = ''
+  }
+
   get enabled(): boolean {
     return this.composer !== null
   }
@@ -112,5 +163,6 @@ export class PostFxStack {
   dispose(): void {
     this.composer?.dispose()
     this.composer = null
+    this.disposeExport()
   }
 }

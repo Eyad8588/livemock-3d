@@ -140,12 +140,23 @@ class SceneController {
     })
 
     // drag & drop media onto a device
+    const dropHint = document.createElement('div')
+    dropHint.className = 'drop-hint'
+    container.appendChild(dropHint)
+    let hideHint = 0
     container.addEventListener('dragover', (e) => {
       e.preventDefault()
       e.dataTransfer!.dropEffect = 'copy'
+      const dev = this.pickDeviceAt(e.clientX, e.clientY) ?? store.selectedDevice()
+      const label = dev ? (getPreset(dev.presetId).label ?? 'device') : null
+      dropHint.textContent = label ? `Drop to put it on ${label}` : 'Add a device first'
+      dropHint.classList.add('show')
+      window.clearTimeout(hideHint)
+      hideHint = window.setTimeout(() => dropHint.classList.remove('show'), 250)
     })
     container.addEventListener('drop', (e) => {
       e.preventDefault()
+      dropHint.classList.remove('show')
       void this.handleDrop(e)
     })
 
@@ -156,40 +167,14 @@ class SceneController {
   }
 
   private async handleDrop(e: DragEvent): Promise<void> {
-    // media dragged from the left panel
-    const mediaId = e.dataTransfer?.getData('application/x-livemock-media')
-    if (mediaId) {
-      const media = store.project.media.find((m) => m.id === mediaId)
-      const target = this.pickDeviceAt(e.clientX, e.clientY) ?? store.selectedDevice()
-      if (media && target) {
-        const { assignMedia } = await import('../ui/leftPanel')
-        assignMedia(target.id, media)
-      }
+    const target = this.pickDeviceAt(e.clientX, e.clientY) ?? store.selectedDevice() ?? store.scene.devices[store.scene.devices.length - 1]
+    if (!target) {
+      const { toast } = await import('../ui/toast')
+      toast('Add a device first, then drop your video onto its screen')
       return
     }
-    const files = [...(e.dataTransfer?.files ?? [])]
-    if (files.length === 0) return
-    const paths = files.map((f) => window.livemock.pathForFile(f))
-    const entries = await window.livemock.importMediaFromPaths(paths, store.project.id)
-    store.addMedia(entries)
-    const target = this.pickDeviceAt(e.clientX, e.clientY) ?? store.selectedDevice() ?? store.scene.devices[store.scene.devices.length - 1]
-    if (!target) return
-    const media = entries[0]
-    if (!media) return
-    if (media.kind === 'image') {
-      store.setDeviceScreen(target.id, { kind: 'image', mediaId: media.id, fit: 'fit' })
-    } else if (media.kind === 'video') {
-      store.setDeviceScreen(target.id, {
-        kind: 'video',
-        mediaId: media.id,
-        fit: 'fit',
-        trimIn: 0,
-        trimOut: media.durationSec ?? 5,
-        rate: 1,
-        loop: true,
-        offsetSec: 0
-      })
-    }
+    const { dropOntoDevice } = await import('../ui/leftPanel')
+    await dropOntoDevice(target.id, e.dataTransfer)
   }
 
   private pickDeviceAt(clientX: number, clientY: number): DeviceInstance | null {
@@ -249,7 +234,30 @@ class SceneController {
   }
 
   // ---------- device sync ----------
+  private envSig = ''
+  private envBackground: THREE.Color | null = null
+
+  /** Rebuild lights/backdrop when the scene's environment settings change. */
+  private syncEnvironment(): void {
+    const env = store.scene.environment
+    const sig = JSON.stringify(env)
+    if (!this.envRig || sig === this.envSig) return
+    this.envSig = sig
+    this.envRig.update(env)
+    // environments without a backdrop mesh still need an opaque background
+    // in exports (the viewport canvas is alpha-enabled)
+    const solid: Partial<Record<typeof env.id, string>> = {
+      'floating-void': '#0b0d12',
+      'dark-cinematic': '#06070a',
+      'reflective-floor': '#0c0e13'
+    }
+    const bg = solid[env.id]
+    this.envBackground = bg ? new THREE.Color(bg) : null
+    this.scene.background = this.envBackground
+  }
+
   private syncDevices(): void {
+    this.syncEnvironment()
     const scene = store.scene
     const keep = new Set(scene.devices.map((d) => d.id))
     // remove gone
@@ -286,7 +294,8 @@ class SceneController {
         void buildCustomDevice(modelUrl, {
           targetSizeMm: preset.targetSizeMm,
           rotationYDeg: preset.modelRotationYDeg ?? 0,
-          enableLid: preset.kind === 'laptop'
+          enableLid: preset.kind === 'laptop',
+          screenCornerRadiusMm: preset.screenCornerRadiusMm
         }).then((custom) => {
           const current = this.rigs.get(dev.id)
           if (!custom || current !== placeholder) {
@@ -298,6 +307,7 @@ class SceneController {
           custom.root.traverse((o) => {
             if (o instanceof THREE.Mesh) o.castShadow = true
           })
+          addContactShadow(custom)
           this.scene.add(custom.root)
           this.rigs.set(dev.id, custom)
           const provider = this.providers.get(dev.id)
@@ -317,6 +327,7 @@ class SceneController {
         })
         rig.screenMesh.castShadow = false
         rig.screenMesh.receiveShadow = false
+        addContactShadow(rig)
         this.scene.add(rig.root)
         this.rigs.set(dev.id, rig)
         this.attachProvider(dev)
@@ -338,6 +349,7 @@ class SceneController {
             if (o instanceof THREE.Mesh) o.castShadow = true
           })
           rig.screenMesh.castShadow = false
+          addContactShadow(rig)
           if (provider) this.applyProviderToRig(rig, provider)
           this.scene.add(rig.root)
           this.rigs.set(dev.id, rig)
@@ -408,6 +420,8 @@ class SceneController {
     if (provider && rig) {
       this.providers.set(dev.id, provider)
       this.applyProviderToRig(rig, provider)
+    } else if (rig) {
+      this.applyProviderToRig(rig, null)
     }
   }
 
@@ -468,22 +482,64 @@ class SceneController {
         applyTransform(rig, transform, dev.lidAngleDeg ? evalTrack(dev.lidAngleDeg, t) : 105)
       }
     }
-    const cam = store.scene.camera
-    const pos = evalTrack(cam.position, t)
-    const target = evalTrack(cam.target, t)
-    const fov = evalTrack(cam.fov, t)
-    if (pos && target) {
-      this.camera.position.set(pos.x, pos.y, pos.z)
-      this.camera.lookAt(target.x, target.y, target.z)
-      this.controls?.target.set(target.x, target.y, target.z)
+    if (!this.useEditorCamera) {
+      const cam = store.scene.camera
+      const pos = evalTrack(cam.position, t)
+      const target = evalTrack(cam.target, t)
+      const fov = evalTrack(cam.fov, t)
+      if (pos && target) {
+        this.camera.position.set(pos.x, pos.y, pos.z)
+        this.camera.lookAt(target.x, target.y, target.z)
+        this.controls?.target.set(target.x, target.y, target.z)
+      }
+      if (fov !== undefined) this.camera.fov = fov
     }
-    if (fov !== undefined) this.camera.fov = fov
     this.camera.updateProjectionMatrix()
     for (const p of this.providers.values()) p.update(t, true)
+    this.applyScreenFits()
+  }
+
+  /** Re-bind a device's current provider texture to its screen (export swaps). */
+  rebindScreen(deviceId: string): void {
+    const rig = this.rigs.get(deviceId)
+    const provider = this.providers.get(deviceId)
+    if (rig && provider) this.applyProviderToRig(rig, provider)
+    this.applyScreenFits()
+  }
+
+  /** Aspect of the editor viewport — exports keep its horizontal coverage. */
+  viewportAspect(): number {
+    const w = this.container?.clientWidth ?? 16
+    const h = this.container?.clientHeight ?? 9
+    return h > 0 ? w / h : 16 / 9
+  }
+
+  private exportRefAspect: number | null = null
+  private useEditorCamera = false
+
+  /**
+   * Enter/leave export mode: hides editor-only helpers, pins reference framing.
+   * `editorCamera`: render from the current viewport camera (what you see)
+   * instead of the animated camera track — used for still frames.
+   */
+  setExportMode(on: boolean, opts: { editorCamera?: boolean } = {}): void {
+    if (on) {
+      this.useEditorCamera = opts.editorCamera === true
+      this.exportRefAspect = this.viewportAspect()
+      if (this.gizmo) this.gizmo.getHelper().visible = false
+    } else {
+      this.exportRefAspect = null
+      this.useEditorCamera = false
+      this.postFx.disposeExport()
+      if (this.gizmo) this.gizmo.getHelper().visible = true
+      this.resize()
+      void this.evaluateTime()
+    }
   }
 
   setBackdropVisible(visible: boolean): void {
     this.envRig?.setBackdropVisible(visible)
+    this.scene.background = visible ? this.envBackground : null
   }
 
   providerFor(deviceId: string): ScreenProvider | null {
@@ -545,12 +601,14 @@ class SceneController {
   }
 
   /** Map content onto the screen plane honoring the fit mode (fill/fit/crop). */
-  private applyScreenFits(): void {
+  applyScreenFits(): void {
     for (const dev of store.scene.devices) {
       const provider = this.providers.get(dev.id)
       const rig = this.rigs.get(dev.id)
       if (!provider || !rig || !provider.texture) continue
-      if (provider.contentAspect === null || (provider as unknown as { __fitDone?: boolean }).__fitDone === true) continue
+      const fitKey = `${dev.screen.kind === 'image' || dev.screen.kind === 'video' ? dev.screen.fit : 'fill'}:${provider.contentAspect}:${rig.screenWmm.toFixed(2)}x${rig.screenHmm.toFixed(2)}`
+      const tagged = provider.texture as unknown as { __fitKey?: string }
+      if (provider.contentAspect === null || tagged.__fitKey === fitKey) continue
       const mat = rig.screenMesh.material as THREE.MeshBasicMaterial
       if (mat.map !== provider.texture) continue
       const fit = dev.screen.kind === 'image' || dev.screen.kind === 'video' ? dev.screen.fit : 'fill'
@@ -583,7 +641,8 @@ class SceneController {
           }
         }
       }
-      ;(provider as unknown as { __fitDone?: boolean }).__fitDone = provider.contentAspect !== null
+      tagged.__fitKey = fitKey
+      tex.needsUpdate = true
       mat.needsUpdate = true
     }
   }
@@ -607,6 +666,16 @@ class SceneController {
     this.camera.position.copy(center).add(dir.multiplyScalar(dist))
     this.controls?.target.copy(center)
     this.camera.lookAt(center)
+    this.controls?.update()
+  }
+
+  /** Place the editor camera (orbit target included). */
+  lookFrom(pos: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }, fov?: number): void {
+    this.camera.position.set(pos.x, pos.y, pos.z)
+    this.controls?.target.set(target.x, target.y, target.z)
+    this.camera.lookAt(target.x, target.y, target.z)
+    if (fov !== undefined) this.camera.fov = fov
+    this.camera.updateProjectionMatrix()
     this.controls?.update()
   }
 
@@ -696,28 +765,29 @@ class SceneController {
    */
   renderToTarget(width: number, height: number): Uint8Array | null {
     if (!this.renderer) return null
-    const target = new THREE.WebGLRenderTarget(width, height, {
-      samples: 4,
-      colorSpace: THREE.SRGBColorSpace
-    })
     const fx = store.scene.postFx
-    const fxOn = fx.bloom || fx.vignette || fx.filmGrain || fx.depthOfField
-    this.renderer.setRenderTarget(target)
+    const fxOn = fx.bloom || fx.vignette || fx.filmGrain
+    const clearAlphaWas = this.renderer.getClearAlpha()
     this.renderer.setClearAlpha(0)
-    if (fxOn) {
-      this.postFx.ensure(this.renderer, this.scene, this.camera, width, height)
-      this.postFx.resize(width, height)
-      this.postFx.setCamera(this.camera)
-      this.postFx.apply(fx, store.time)
-      this.postFx.render(1 / 60)
-    } else {
+    try {
+      if (fxOn) {
+        return this.postFx.renderExportPixels(this.renderer, this.scene, this.camera, fx, store.time, width, height)
+      }
+      const target = new THREE.WebGLRenderTarget(width, height, {
+        samples: 4,
+        colorSpace: THREE.SRGBColorSpace
+      })
+      this.renderer.setRenderTarget(target)
+      this.renderer.clear()
       this.renderer.render(this.scene, this.camera)
+      const buf = new Uint8Array(width * height * 4)
+      this.renderer.readRenderTargetPixels(target, 0, 0, width, height, buf)
+      this.renderer.setRenderTarget(null)
+      target.dispose()
+      return buf
+    } finally {
+      this.renderer.setClearAlpha(clearAlphaWas)
     }
-    const buf = new Uint8Array(width * height * 4)
-    this.renderer.readRenderTargetPixels(target, 0, 0, width, height, buf)
-    this.renderer.setRenderTarget(null)
-    target.dispose()
-    return buf
   }
 
   /** Compose one export frame (with optional motion-blur accumulation) into a canvas. */
@@ -725,8 +795,39 @@ class SceneController {
     const ctx = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D
     const w = canvas.width
     const h = canvas.height
+    const gizmoHelper = this.gizmo?.getHelper()
+    const gizmoWas = gizmoHelper?.visible ?? false
+    const fovWas = this.camera.fov
+    if (gizmoHelper) gizmoHelper.visible = false
+    try {
+      this.renderExportFrameInner(ctx, w, h, timeSec, samples)
+    } finally {
+      if (gizmoHelper) gizmoHelper.visible = gizmoWas
+      // restore the editor camera projection
+      this.camera.fov = fovWas
+      if (this.container && this.container.clientHeight > 0) this.camera.aspect = this.container.clientWidth / this.container.clientHeight
+      this.camera.updateProjectionMatrix()
+    }
+  }
+
+  /** prepareFrame + export framing: target aspect, horizontal coverage of the editor view kept. */
+  private prepareExportFrame(timeSec: number, w: number, h: number): void {
+    this.prepareFrame(timeSec)
+    const aspect = w / h
+    const ref = this.exportRefAspect ?? this.viewportAspect()
+    this.camera.aspect = aspect
+    if (aspect < ref) {
+      // narrower output (e.g. 9:16 from a 16:9 editor): widen the vertical FOV
+      // so everything visible left-to-right in the editor stays in frame
+      const half = THREE.MathUtils.degToRad(this.camera.fov / 2)
+      this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(half) * (ref / aspect)))
+    }
+    this.camera.updateProjectionMatrix()
+  }
+
+  private renderExportFrameInner(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number, timeSec: number, samples: number): void {
     if (samples <= 1) {
-      this.prepareFrame(timeSec)
+      this.prepareExportFrame(timeSec, w, h)
       const buf = this.renderToTarget(w, h)
       if (buf) putPixelsFlipped(ctx, buf, w, h)
       return
@@ -734,7 +835,7 @@ class SceneController {
     const acc = new Float64Array(w * h * 4)
     for (let s = 0; s < samples; s++) {
       const st = timeSec + (s / samples - 0.5) / store.scene.fps
-      this.prepareFrame(st)
+      this.prepareExportFrame(st, w, h)
       const buf = this.renderToTarget(w, h)
       if (!buf) continue
       for (let i = 0; i < acc.length; i++) acc[i] = (acc[i] ?? 0) + (buf[i] ?? 0)
@@ -773,6 +874,59 @@ function putPixelsFlipped(ctx: OffscreenCanvasRenderingContext2D, buf: Uint8Arra
     img.data.set(buf.subarray(src, src + rowBytes), y * rowBytes)
   }
   ctx.putImageData(img, 0, 0)
+}
+
+let contactShadowTex: THREE.Texture | null = null
+
+/**
+ * Soft contact shadow under a device's footprint: grounds devices on any
+ * environment (and survives transparent exports, like a product shot).
+ */
+function addContactShadow(rig: DeviceRig): void {
+  const root = rig.root
+  if (root.userData.contactShadow) return
+  const savedPos = root.position.clone()
+  const savedRot = root.rotation.clone()
+  const savedScale = root.scale.clone()
+  root.position.set(0, 0, 0)
+  root.rotation.set(0, 0, 0)
+  root.scale.set(1, 1, 1)
+  root.updateMatrixWorld(true)
+  const box = new THREE.Box3()
+  root.traverse((o) => {
+    if (o instanceof THREE.Mesh && o.visible) box.expandByObject(o)
+  })
+  root.position.copy(savedPos)
+  root.rotation.copy(savedRot)
+  root.scale.copy(savedScale)
+  if (box.isEmpty()) return
+  if (!contactShadowTex) {
+    const cv = document.createElement('canvas')
+    cv.width = cv.height = 128
+    const ctx = cv.getContext('2d')!
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64)
+    g.addColorStop(0, 'rgba(0,0,0,0.7)')
+    g.addColorStop(0.5, 'rgba(0,0,0,0.35)')
+    g.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = g
+    ctx.fillRect(0, 0, 128, 128)
+    contactShadowTex = new THREE.CanvasTexture(cv)
+  }
+  const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
+  const w = size.x * 1.18 + 24
+  const d = Math.max(size.z, 6) * 1.25 + 24
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, d),
+    new THREE.MeshBasicMaterial({ map: contactShadowTex, transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 })
+  )
+  plane.rotation.x = -Math.PI / 2
+  plane.position.set(center.x, box.min.y + 0.15, center.z)
+  plane.renderOrder = -1
+  plane.raycast = () => undefined
+  plane.name = 'contact-shadow'
+  root.add(plane)
+  root.userData.contactShadow = plane
 }
 
 function screenSig(dev: DeviceInstance): string {

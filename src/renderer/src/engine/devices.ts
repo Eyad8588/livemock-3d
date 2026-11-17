@@ -350,6 +350,40 @@ export interface GlbBuildOptions {
   rotationYDeg?: number
   enableLid?: boolean
   screenInset?: number // fraction of display size trimmed from each side (bezel safety)
+  screenCornerRadiusMm?: number
+}
+
+/**
+ * Furthest extent along `normal` (relative to `origin`) of the given meshes'
+ * actual vertices, counting only vertices that lie over the display window
+ * (in-plane |r| <= halfW, |u| <= halfH). AABB corners of tilted meshes would
+ * grossly overestimate this, floating the screen in front of the lid.
+ */
+function frontExtentOverWindow(
+  meshes: THREE.Mesh[],
+  origin: THREE.Vector3,
+  normal: THREE.Vector3,
+  right: THREE.Vector3,
+  up: THREE.Vector3,
+  halfW: number,
+  halfH: number
+): number {
+  let front = -Infinity
+  const v = new THREE.Vector3()
+  for (const mesh of meshes) {
+    const pos = mesh.geometry.attributes.position as THREE.BufferAttribute | undefined
+    if (!pos) continue
+    mesh.updateMatrixWorld(true)
+    const step = pos.count > 60000 ? Math.ceil(pos.count / 60000) : 1
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld).sub(origin)
+      if (Math.abs(v.dot(right)) > halfW || Math.abs(v.dot(up)) > halfH) continue
+      const d = v.dot(normal)
+      // ignore geometry far behind or implausibly far ahead (other parts of the device)
+      if (d > front && d < 25 && d > -25) front = d
+    }
+  }
+  return front
 }
 
 /**
@@ -361,7 +395,7 @@ export interface GlbBuildOptions {
  * pivot so the lid can open/close.
  */
 export async function buildCustomDevice(mediaUrl: string, opts: GlbBuildOptions = {}): Promise<DeviceRig | null> {
-  const { targetSizeMm, rotationYDeg = 0, enableLid = false, screenInset = 0.015 } = opts
+  const { targetSizeMm, rotationYDeg = 0, enableLid = false, screenInset = 0.015, screenCornerRadiusMm = 0 } = opts
   try {
     const loader = new GLTFLoader()
     const gltf = await loader.loadAsync(mediaUrl)
@@ -542,8 +576,10 @@ export async function buildCustomDevice(mediaUrl: string, opts: GlbBuildOptions 
 
     // mount in FRONT of the entire display stack
     const depth = Math.max(0.3, quadW * 0.0012)
-    const quadGeo = new THREE.PlaneGeometry(quadW, quadH)
-    const screenMat = new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.FrontSide })
+    const cornerR = Math.min(screenCornerRadiusMm, quadW / 2 - 0.1, quadH / 2 - 0.1)
+    const quadGeo = cornerR > 0.05 ? roundedRectGeometry(quadW, quadH, cornerR) : new THREE.PlaneGeometry(quadW, quadH)
+    // dark "display off" until a source is attached
+    const screenMat = new THREE.MeshBasicMaterial({ color: 0x07080a, toneMapped: false, side: THREE.FrontSide })
     const screenQuad = new THREE.Mesh(quadGeo, screenMat)
     screenQuad.position.copy(quadCenter).add(normal.clone().multiplyScalar(depth))
     screenQuad.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal)
@@ -559,7 +595,7 @@ export async function buildCustomDevice(mediaUrl: string, opts: GlbBuildOptions 
       opacity: 0.0,
       envMapIntensity: 0.5
     })
-    const glareQuad = new THREE.Mesh(new THREE.PlaneGeometry(quadW, quadH), glareMat)
+    const glareQuad = new THREE.Mesh(quadGeo.clone(), glareMat)
     glareQuad.position.copy(screenQuad.position).add(normal.clone().multiplyScalar(0.4))
     glareQuad.quaternion.copy(screenQuad.quaternion)
     group.add(glareQuad)
@@ -602,27 +638,32 @@ export async function buildCustomDevice(mediaUrl: string, opts: GlbBuildOptions 
       lidCloseRad = Math.atan2(d.y, d.z)
       if (lidCloseRad < 0) lidCloseRad += Math.PI * 2
 
-      // bezel plates often sit in FRONT of the display glass with a window
-      // cutout — mount the quad (and glare) ahead of the deepest lid mesh so
-      // content is never masked
-      let frontMax = -Infinity
-      for (const mesh of [...lidMeshes, screenQuad, glareQuad]) {
-        const b = new THREE.Box3().setFromObject(mesh)
-        for (const cx of [b.min.x, b.max.x]) {
-          for (const cy of [b.min.y, b.max.y]) {
-            for (const cz of [b.min.z, b.max.z]) {
-              frontMax = Math.max(frontMax, new THREE.Vector3(cx, cy, cz).sub(quadCenter).dot(normal))
-            }
-          }
+    }
+
+    // Anything opaque over the display window (bezel plates with a cutout,
+    // a cover layer) must sit BEHIND the content: measure real vertices.
+    {
+      group.updateMatrixWorld(true)
+      const worldOrigin = screenQuad.getWorldPosition(new THREE.Vector3())
+      const q = screenQuad.getWorldQuaternion(new THREE.Quaternion())
+      const wn = new THREE.Vector3(0, 0, 1).applyQuaternion(q)
+      const wr = new THREE.Vector3(1, 0, 0).applyQuaternion(q)
+      const wu = new THREE.Vector3(0, 1, 0).applyQuaternion(q)
+      const occluders: THREE.Mesh[] = []
+      group.traverse((o) => {
+        if (o instanceof THREE.Mesh && o.visible && o !== screenQuad && o !== glareQuad) occluders.push(o)
+      })
+      const front = frontExtentOverWindow(occluders, worldOrigin, wn, wr, wu, quadW * 0.44, quadH * 0.44)
+      if (Number.isFinite(front) && front > -0.15) {
+        const lift = front + 0.25
+        for (const [m, extra] of [[screenQuad, 0], [glareQuad, 0.3]] as const) {
+          const wp = m.getWorldPosition(new THREE.Vector3()).addScaledVector(wn, lift + extra)
+          m.position.copy(m.parent ? m.parent.worldToLocal(wp) : wp)
         }
-      }
-      const lift = frontMax + 0.4 - depth
-      if (lift > 0) {
-        screenQuad.position.addScaledVector(normal, lift)
-        glareQuad.position.addScaledVector(normal, lift + 0.3)
       }
     }
 
+    group.userData.glb = true
     const dispose = (): void => {
       group.traverse((o) => {
         if (o instanceof THREE.Mesh) o.geometry.dispose()

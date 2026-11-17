@@ -35,6 +35,8 @@ export const IPC = {
   MediaImportDialog: 'media:import-dialog',
   MediaImportPath: 'media:import-path',
   MediaList: 'media:list',
+  MediaImportSample: 'media:import-sample',
+  ModelsAvailable: 'models:available',
 
   // live URL sources
   LiveStart: 'live:start',
@@ -67,6 +69,10 @@ export const IPC = {
 } as const
 
 // ---------- payload types ----------
+
+/** Bundled sample clips (assets/sample-media) — whitelist, never a path. */
+export const SAMPLE_MEDIA = ['sample-phone.mp4', 'sample-laptop.mp4'] as const
+export type SampleMediaName = (typeof SAMPLE_MEDIA)[number]
 
 export interface AppInfoResult {
   version: string
@@ -253,6 +259,10 @@ export interface LiveMockPreloadApi {
 
   importMediaDialog(projectId: string): Promise<MediaEntry[]>
   importMediaFromPaths(paths: string[], projectId: string): Promise<MediaEntry[]>
+  /** Import bundled sample clips (assets/sample-media) by whitelisted name. */
+  importSampleMedia(names: SampleMediaName[], projectId: string): Promise<MediaEntry[]>
+  /** Which GLB device model files are present in assets/models. */
+  modelsAvailable(): Promise<string[]>
   /** Resolve a File to an absolute path inside the sandboxed renderer. */
   pathForFile(file: File): string
   mediaMediaUrl(mediaId: string): string

@@ -119,6 +119,11 @@ async function bootstrap(): Promise<void> {
       topbar.querySelector<HTMLButtonElement>('button')?.focus()
       return
     }
+    if (meta && e.shiftKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      void import('./ui/frameExport').then((m) => m.exportFrameNow())
+      return
+    }
     if (meta && e.key.toLowerCase() === 'e') {
       e.preventDefault()
       import('./ui/exportDialog').then((m) => m.openExportDialog())
@@ -177,7 +182,7 @@ async function bootstrap(): Promise<void> {
   window.setTimeout(() => maybeShowFirstRun(), 600)
 
   // expose for E2E tests only (never used in production code paths)
-  void Promise.all([import('./engine/modes'), import('./export/exporter')]).then(([m, ex]) => {
+  void Promise.all([import('./engine/modes'), import('./export/exporter'), import('./ui/frameExport'), import('./ui/leftPanel')]).then(([m, ex, fr, lp]) => {
     ;(window as unknown as { __lmTest?: unknown }).__lmTest = {
       store,
       sceneController,
@@ -185,7 +190,10 @@ async function bootstrap(): Promise<void> {
         const handle = ex.startExport(settings, store.scene, (p) => onProgress?.(p))
         return handle.promise
       },
-      getThree: () => sceneController.debugThree()
+      getThree: () => sceneController.debugThree(),
+      exportStill: ex.exportStill,
+      exportFrameNow: fr.exportFrameNow,
+      dropOntoDevice: lp.dropOntoDevice
     }
     ;(window as unknown as { __lmModes?: unknown }).__lmModes = { apply: m.applyMode }
   })

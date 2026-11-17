@@ -5,6 +5,8 @@ import { el, clear } from './dom'
 import { toast } from './toast'
 import { openExportDialog } from './exportDialog'
 import { openModesDialog } from './modesDialog'
+import { exportFrameNow, openFrameDialog } from './frameExport'
+import { loadShowcase } from './showcase'
 
 export function mountTopbar(root: HTMLElement): void {
   const render = (): void => {
@@ -36,6 +38,7 @@ export function mountTopbar(root: HTMLElement): void {
       btn(t('top.open'), () => void openProject()),
       btn(t('top.save'), () => void saveProject()),
       btn(t('top.modes'), () => openModesDialog(), 'accent'),
+      btn('✨ Mac + iPhone', () => void loadShowcase(), '', false),
       btn(t('top.undo'), () => {
         if (!store.undo()) toast('Nothing to undo')
       }, 'ghost'),
@@ -66,10 +69,21 @@ export function mountTopbar(root: HTMLElement): void {
       { class: 'row', style: 'margin:0' },
       langBtn,
       themeBtn,
+      frameGroup(),
       btn(t('top.export'), () => void openExportDialog(), 'primary')
     )
 
     root.append(bar, right)
+  }
+
+  function frameGroup(): HTMLElement {
+    const shot = el('button', { onclick: () => void exportFrameNow() }, '📷 Frame') as HTMLButtonElement
+    shot.title = 'Export the current view as a PNG (⌘⇧F) — settings via ▾'
+    shot.dataset['testid'] = 'export-frame'
+    const opts = el('button', { onclick: () => openFrameDialog(), style: 'padding-inline:6px' }, '▾') as HTMLButtonElement
+    opts.title = 'Frame export options (size, transparency)'
+    opts.dataset['testid'] = 'export-frame-options'
+    return el('span', { class: 'btn-group', style: 'display:inline-flex;gap:2px' }, shot, opts)
   }
 
   store.on('project', render)
