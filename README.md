@@ -6,21 +6,60 @@ minutes. Free and open source (MIT): no accounts, watermarks or telemetry.**
 
 Electron + Three.js desktop app for macOS and Windows. Everything runs locally.
 
+## What it does (in simple words)
+
+LiveMock 3D puts your app or website onto a realistic 3D phone or laptop. You
+drop in a screen recording, video or image and it plays on the device's
+screen. A camera move (slow push-in, spin, tilt…) makes it look like a
+product ad. Then you save a video (MP4 and more) or a high-quality picture
+(PNG) to use on social media, a landing page or in a pitch.
+
+### Make your first video
+
+1. **Add a device:** pick one from *+ Add device*, or click **✨ Mac + iPhone**
+   for a MacBook and an iPhone together.
+2. **Drop your video on the screen:** drag the file from Finder/Explorer onto
+   the device (or click **🎬** next to it in the Devices list).
+3. **Pick a camera move:** click **Modes** and choose one (e.g. Cinematic
+   Hero), then press ▶ to preview.
+4. **Export:** click **Export** for a video or **📷 Frame** for a PNG. Files go
+   to `~/Downloads/LiveMock/`.
+
 ## Screenshots
 
-| Before | After |
+![The editor with the Mac + iPhone scene loaded](demo/after/after-app-showcase.png)
+*The editor: Mac + iPhone scene loaded, with the device list and environments
+on the left and the timeline at the bottom.*
+
+![A video playing on the iPhone screen](docs/screenshots/video-playing-on-iphone.png)
+*Your video plays live on the device screen (here the sample clip on the
+iPhone 17 Pro Max, with rounded screen corners).*
+
+![Animated preview of an exported MP4](docs/screenshots/export-preview.gif)
+*A preview of an exported video (GIF made from
+[`demo/sample-video-1920x1080.mp4`](demo/sample-video-1920x1080.mp4)): slow
+camera push-in, both screens playing.*
+
+![Sample exported PNG frame](demo/sample-frame-1920x1080.png)
+*A sample exported frame: a 1920×1080 PNG made with 📷 Frame.*
+
+| Video export dialog | Frame (PNG) export dialog |
 |---|---|
-| ![Original export: black screens, screen quad floating off the lid, gizmo baked into the video](demo/before/export-mp4-frame-before.png) | ![Mac + iPhone showcase with a video playing on both screens](demo/sample-frame-1920x1080.png) |
+| ![Export dialog](docs/screenshots/export-video-dialog.png) | ![Frame export dialog](docs/screenshots/export-frame-dialog.png) |
+| *Pick format, aspect ratios (several at once), quality, fps, motion blur.* | *Pick size, transparent background, and current view vs. animated camera.* |
 
-![The editor with the Mac + iPhone showcase loaded](demo/after/after-app-showcase.png)
-
-| Your own clips on both screens | Transparent PNG export |
+| Your own clips on both screens | Transparent PNG |
 |---|---|
-| ![User test-pattern videos playing on the MacBook and iPhone](demo/after/after-app-user-videos.png) | ![2048×2048 PNG with transparent background](demo/sample-frame-transparent-2048.png) |
+| ![User test-pattern videos on the MacBook and iPhone](demo/after/after-app-user-videos.png) | ![2048×2048 PNG with a transparent background](demo/sample-frame-transparent-2048.png) |
+| *Any video you drop fills its screen, cropped to fit.* | *Background removed for compositing, with soft shadows kept.* |
 
-Sample outputs: [`demo/sample-video-1920x1080.mp4`](demo/sample-video-1920x1080.mp4),
-[`demo/sample-frame-viewport.png`](demo/sample-frame-viewport.png),
-[`demo/e2e-report.json`](demo/e2e-report.json).
+| Before this update | After |
+|---|---|
+| ![Old export: black screens, floating screen, gizmo in the video](demo/before/export-mp4-frame-before.png) | ![New export with video on both screens](demo/sample-frame-1920x1080.png) |
+| *Old export: black screens, the MacBook screen floating off the lid, editor arrows baked in.* | *Now: correct screen placement, video playing, clean framing.* |
+
+More outputs: [`demo/sample-frame-viewport.png`](demo/sample-frame-viewport.png),
+[`demo/e2e-report.json`](demo/e2e-report.json) (automated checks).
 
 ## Features
 
@@ -150,8 +189,9 @@ src/
 assets/          sample-media (showcase clips), test-pages (offline EN/AR demo),
                  models (your GLBs, gitignored)
 tests/           unit tests (vitest) + Playwright-Electron e2e/probe scripts
+                 (capture-readme.mjs regenerates docs/screenshots)
 demo/            before/after screenshots and sample exports
-docs/            development screenshots from earlier milestones
+docs/            README screenshots + development screenshots from earlier milestones
 ```
 
 Security: every window is sandboxed (`sandbox`, `contextIsolation`, no

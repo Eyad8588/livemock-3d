@@ -63,7 +63,7 @@ export function openExportDialog(): void {
           btn.className = 'accent'
         }
       }
-    }, a.label.split(' — ')[0]!)
+    }, a.id.replace('-4k', ' 4K'))
     chip.title = a.label
     aspectBox.appendChild(chip)
   }
